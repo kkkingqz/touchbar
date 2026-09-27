@@ -25,6 +25,8 @@ pub const COMPONENT_TASK_MARGIN: u64 = 1024;
 const COMPONENT_MEMORY_MAX: &[u8] = b"536870912";
 const COMPONENT_CPU_MAX: &[u8] = b"100000 100000";
 const COMPONENT_CGROUP_PREFIX: &str = "touchbar-component-";
+/// The leaves `command.run.v1` creates beside the component hosts' leaves.
+const COMMAND_CGROUP_PREFIX: &str = "touchbar-command-";
 const EMPTY_WAIT: Duration = Duration::from_secs(2);
 const EMPTY_POLL: Duration = Duration::from_millis(10);
 static NEXT_CGROUP: AtomicU64 = AtomicU64::new(1);
@@ -97,11 +99,13 @@ impl ComponentCgroup {
     }
 }
 
-/// A supervisor killed with SIGKILL cannot run `Drop`. Its parent-death signal
-/// still kills the host, leaving an empty cgroup leaf. Remove only leaves with
-/// our exact generated name, a dead owner PID, private same-user ownership,
-/// and an authoritative `populated 0` state. A live supervisor's newly created
-/// but not-yet-populated leaf is therefore never mistaken for an orphan.
+/// A supervisor killed with SIGKILL cannot run `Drop`. The parent-death
+/// signals of its host and commands still kill them, leaving empty cgroup
+/// leaves; anything a command started survives in its leaf. Clean up only
+/// leaves with our exact generated names, a dead owner PID, and private
+/// same-user ownership: whatever still runs in one is killed, and the leaf is
+/// removed once it is authoritatively `populated 0`. A live supervisor's
+/// leaves are therefore never touched.
 fn cleanup_orphaned_component_cgroups(parent: &Path) -> Result<()> {
     // SAFETY: geteuid takes no arguments.
     let effective_user = unsafe { libc::geteuid() };
@@ -110,7 +114,7 @@ fn cleanup_orphaned_component_cgroups(parent: &Path) -> Result<()> {
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
             continue;
         };
-        let Some(owner_pid) = component_cgroup_owner(&name) else {
+        let Some(owner_pid) = generated_cgroup_owner(&name) else {
             continue;
         };
         if Path::new("/proc").join(owner_pid.to_string()).exists() {
@@ -128,12 +132,7 @@ fn cleanup_orphaned_component_cgroups(parent: &Path) -> Result<()> {
         {
             bail!("orphan component cgroup is not a private user-owned directory");
         }
-        let events = match fs::read_to_string(path.join("cgroup.events")) {
-            Ok(events) => events,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error).context("read orphan component cgroup state"),
-        };
-        if !events.lines().any(|line| line == "populated 0") {
+        if !orphan_emptied(&path)? {
             continue;
         }
         match fs::remove_dir(&path) {
@@ -145,8 +144,42 @@ fn cleanup_orphaned_component_cgroups(parent: &Path) -> Result<()> {
     Ok(())
 }
 
-fn component_cgroup_owner(name: &str) -> Option<u32> {
-    let suffix = name.strip_prefix(COMPONENT_CGROUP_PREFIX)?;
+/// Whether an orphan leaf is empty, killing what still runs in it first.
+fn orphan_emptied(path: &Path) -> Result<bool> {
+    let populated = || -> Result<Option<bool>> {
+        match fs::read_to_string(path.join("cgroup.events")) {
+            Ok(events) => Ok(Some(!events.lines().any(|line| line == "populated 0"))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).context("read orphan component cgroup state"),
+        }
+    };
+    match populated()? {
+        None => return Ok(false),
+        Some(false) => return Ok(true),
+        Some(true) => {}
+    }
+    match open_control(path, "cgroup.kill", libc::O_WRONLY) {
+        // EBUSY/ENOENT only mean it emptied or went away meanwhile.
+        Ok(kill) => {
+            let _ = write_all(kill.as_raw_fd(), b"1");
+        }
+        Err(_) => return Ok(false),
+    }
+    let deadline = Instant::now() + EMPTY_WAIT;
+    while Instant::now() < deadline {
+        match populated()? {
+            None => return Ok(false),
+            Some(false) => return Ok(true),
+            Some(true) => thread::sleep(EMPTY_POLL),
+        }
+    }
+    Ok(false)
+}
+
+fn generated_cgroup_owner(name: &str) -> Option<u32> {
+    let suffix = name
+        .strip_prefix(COMPONENT_CGROUP_PREFIX)
+        .or_else(|| name.strip_prefix(COMMAND_CGROUP_PREFIX))?;
     let mut fields = suffix.split('-');
     let owner = fields.next()?.parse().ok()?;
     let instance = fields.next()?;
@@ -316,12 +349,16 @@ fn write_all(descriptor: RawFd, mut bytes: &[u8]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::component_cgroup_owner;
+    use super::generated_cgroup_owner;
 
     #[test]
     fn generated_cgroup_names_have_an_unambiguous_owner() {
         assert_eq!(
-            component_cgroup_owner("touchbar-component-123-4-5"),
+            generated_cgroup_owner("touchbar-component-123-4-5"),
+            Some(123)
+        );
+        assert_eq!(
+            generated_cgroup_owner("touchbar-command-123-4-5"),
             Some(123)
         );
         for invalid in [
@@ -331,8 +368,11 @@ mod tests {
             "touchbar-component-123-4-5-6",
             "touchbar-component-123-x-5",
             "touchbar-component-123-4-x",
+            "touchbar-command-0-4-5",
+            "touchbar-command-123-4",
+            "touchbar-commands-123-4-5",
         ] {
-            assert_eq!(component_cgroup_owner(invalid), None, "{invalid}");
+            assert_eq!(generated_cgroup_owner(invalid), None, "{invalid}");
         }
     }
 }

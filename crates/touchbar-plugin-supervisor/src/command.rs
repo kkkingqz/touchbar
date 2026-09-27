@@ -637,6 +637,8 @@ fn spawn_command(
             std::env::var_os(variable.name()).map(|value| (variable.name(), value))
         })
         .collect::<Vec<_>>();
+    // SAFETY: getpid takes no arguments.
+    let supervisor = unsafe { libc::getpid() };
     let mut command = Command::new(format!("/proc/self/fd/{executable_fd}"));
     command
         .args(&prepared.arguments)
@@ -652,6 +654,17 @@ fn spawn_command(
         command.pre_exec(move || {
             if libc::setsid() < 0 || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
+            }
+            // The session daemon stops a supervisor with SIGKILL, so Drop
+            // cannot end its commands; a watcher such as `pactl subscribe`
+            // would otherwise run forever. Commands are spawned on the
+            // supervisor's main thread, whose end is the process's end. A
+            // supervisor that died before this call leaves another parent.
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != supervisor {
+                return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
             }
             if libc::write(cgroup_processes, b"0".as_ptr().cast(), 1) != 1 {
                 return Err(std::io::Error::last_os_error());
