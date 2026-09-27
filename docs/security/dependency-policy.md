@@ -32,5 +32,6 @@ it cannot become an invisible permanent exception.
 
 The workspace also intentionally omits Wasmtime's `parallel-compilation`
 feature. A supervised headless host creates no threads; live GPU mode permits
-only thread-style `clone` for Mesa, bounded by a per-host task rlimit and a
-private cgroup leaf.
+only thread-style `clone` for Mesa, bounded by the `pids.max` of a private
+cgroup leaf. The task rlimit counts every task of the user, so it is only a
+coarse outer bound for systems without a delegated pids controller.

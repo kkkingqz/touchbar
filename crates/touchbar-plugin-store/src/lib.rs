@@ -166,6 +166,8 @@ pub struct StorePaths {
     pub lock: PathBuf,
     pub grants: PathBuf,
     pub session_grants: PathBuf,
+    /// The session daemon's now-playing player, for the media supervisors.
+    pub media_session: PathBuf,
     pub state: PathBuf,
     pub audit: PathBuf,
     pub control: PathBuf,
@@ -185,6 +187,7 @@ impl StorePaths {
             .map(PathBuf::from)
             .context("XDG_RUNTIME_DIR is required for session-only plugin permissions")?;
         paths.session_grants = runtime.join("touchbar/session-permissions.toml");
+        paths.media_session = runtime.join("touchbar/media-session");
         Ok(paths)
     }
 
@@ -194,6 +197,7 @@ impl StorePaths {
             lock: root.join("plugins.toml"),
             grants: root.join("permissions.toml"),
             session_grants: root.join("session-permissions.toml"),
+            media_session: root.join("media-session"),
             state: root.join("state"),
             audit: root.join("audit.jsonl"),
             control: root.join("control.sock"),

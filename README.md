@@ -67,8 +67,8 @@ See [Build a plugin](docs/plugin-author-context.md),
 |---|---|
 | **Verified** | MacBook Pro 13″ M1 (`MacBookPro17,1`) on Asahi Linux |
 | **Expected** | MacBook Pro 13″ M2 (`Mac14,7`) — unverified, [please report](https://github.com/cameroncooper/touchbar/issues) |
-| **In progress** | Intel T2 (`appletbdrm`) — implemented, not yet hardware-verified |
-| **Also needs** | systemd · polkit · Wayland · `tiny-dfr` installed as the rollback target |
+| **In progress** | Intel T2 (`appletbdrm`) — implemented, not yet hardware-verified; see [Intel T2](packaging/README.md#intel-t2) |
+| **Also needs** | systemd · polkit · Wayland · `tiny-dfr` installed as the rollback target (not needed on Intel T2) |
 
 ### Install
 
@@ -104,14 +104,14 @@ A fresh install gives you **the system row** — media keys, and F1–F12 while 
 is held — with the same dim and sleep behaviour as `tiny-dfr`. Nothing else is
 enabled, because nothing else is finished enough to enable for you.
 
-Five worked examples live in [`plugins/`](plugins). They are 150–290 line
+Five worked examples live in [`plugins/`](plugins). Most are 150–290 line
 vertical slices that prove the platform, not products, so read them as tutorials
-rather than installing them:
+rather than installing them. Media is the exception: it follows real players.
 
 | Example | Shows |
 |---|---|
 | [System Controls](plugins/controls) | sliders, glanceable progress, toggles, command templates |
-| [Media](plugins/media) | MPRIS over D-Bus, artwork, a captured timeline |
+| [Media](plugins/media) | the live now-playing MPRIS session, transport, a scrubbable timeline |
 | [Hyprland Navigator](plugins/hyprland) | focus context, workspace scrubbing, typed `hyprctl` |
 | [Capture Studio](plugins/capture) | multi-action palettes, destructive state |
 | [Command Deck](plugins/command-deck) | a user-owned local action service |

@@ -8,4 +8,4 @@ fi
 
 systemctl --user disable --now touchbar-session.service 2>/dev/null || true
 pkexec /usr/lib/touchbar/service-admin-root rollback
-echo "tiny-dfr has been restored; installed TouchBar files were left intact."
+echo "The Touch Bar has been handed back; installed TouchBar files were left intact."

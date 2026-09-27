@@ -521,10 +521,12 @@ fn run_live(
     if let Some(sizing) = expanded_sizing {
         options = options.expanded_sizing(sizing);
     }
+    let mut host = opened.host;
+    host.announce_capabilities()?;
     let summary = run(
         options,
         ComponentApplication {
-            host: opened.host,
+            host,
             item,
             renderer: None,
             ui: None,

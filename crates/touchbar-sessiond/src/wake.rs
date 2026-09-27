@@ -49,8 +49,10 @@ impl EventSignal {
         }
     }
 
-    pub fn drain(&self) -> io::Result<()> {
+    /// Clears every pending notification. Returns whether there was one.
+    pub fn drain(&self) -> io::Result<bool> {
         let mut value = 0_u64;
+        let mut notified = false;
         loop {
             let read = unsafe {
                 libc::read(
@@ -60,6 +62,7 @@ impl EventSignal {
                 )
             };
             if read == size_of::<u64>() as isize {
+                notified = true;
                 continue;
             }
             if read < 0 {
@@ -68,7 +71,7 @@ impl EventSignal {
                     continue;
                 }
                 if error.kind() == io::ErrorKind::WouldBlock {
-                    return Ok(());
+                    return Ok(notified);
                 }
                 return Err(error);
             }
@@ -90,7 +93,7 @@ mod tests {
         let sender = signal.try_clone().unwrap();
         sender.notify();
         sender.notify();
-        signal.drain().unwrap();
-        signal.drain().unwrap();
+        assert!(signal.drain().unwrap());
+        assert!(!signal.drain().unwrap());
     }
 }

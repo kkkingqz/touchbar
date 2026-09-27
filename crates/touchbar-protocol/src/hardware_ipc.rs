@@ -187,9 +187,10 @@ impl HardwareSwapchain {
     ///
     /// The presenter declares its physical size in the swapchain header, so
     /// the transform is derived rather than assumed. A panel that scans out
-    /// portrait (Apple silicon `adp`) and one that is already landscape
-    /// (Intel T2 `appletbdrm`) therefore share one contract, and a buffer
-    /// whose physical size matches neither orientation is rejected.
+    /// portrait and one that is already landscape therefore share one
+    /// contract, and a buffer whose physical size matches neither orientation
+    /// is rejected. Both known drivers, Apple silicon `adp` and Intel T2
+    /// `appletbdrm`, present portrait 60-pixel-wide modes.
     pub fn transform(self) -> Option<OutputTransform> {
         if self.physical_width == self.logical_width && self.physical_height == self.logical_height
         {

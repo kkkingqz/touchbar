@@ -46,6 +46,13 @@ sed -i \
 systemd-analyze verify "$stage_dir/touchbar.service"
 systemd-analyze --user verify "$stage_dir/touchbar-session.service"
 udevadm verify "$project_dir/packaging/udev/99-touchbar.rules"
+# The Intel T2 units run the mode script; verify them against the checked-in copy.
+for unit in touchbar-t2-display.service touchbar-t2-sleep.service; do
+    sed "s#/usr/lib/touchbar/touchbar-t2-mode#$project_dir/scripts/touchbar-t2-mode.sh#" \
+        "$project_dir/packaging/systemd/$unit" >"$stage_dir/$unit"
+    systemd-analyze verify "$stage_dir/$unit"
+done
+udevadm verify "$project_dir/packaging/udev/90-touchbar-t2.rules"
 
 rg -q '^ExecStart=/usr/lib/touchbar/touchbard ' \
     "$project_dir/packaging/systemd/touchbar.service"

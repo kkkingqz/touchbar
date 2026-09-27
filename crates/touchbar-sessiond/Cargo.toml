@@ -21,8 +21,10 @@ touchbar-policy = { path = "../touchbar-policy" }
 touchbar-profile-config = { path = "../touchbar-profile-config" }
 touchbar-layout = { path = "../touchbar-layout" }
 touchbar-model = { path = "../touchbar-model" }
+touchbar-mpris = { path = "../touchbar-mpris" }
 touchbar-system-bar = { path = "../touchbar-system-bar" }
 touchbar-ui = { path = "../touchbar-ui" }
 wayland-client.workspace = true
 wayland-protocols.workspace = true
 wayland-server.workspace = true
+zbus.workspace = true

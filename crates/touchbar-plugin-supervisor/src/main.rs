@@ -21,12 +21,12 @@ use touchbar_package::{
     encode_asset_bundle,
 };
 use touchbar_plugin_supervisor::{
-    AppearanceProviderBackend, AuditFile, AuditFileLimits, ClipboardBackend, CommandRunBackend,
-    ComponentCgroup, ConnectionExit, ConnectionIdentity, ConnectionLimits, ContextReadBackend,
-    DbusCallBackend, DbusSubscriptionBackend, FilesystemReadBackend, FilesystemWriteBackend,
-    GrantStoreWatcher, HttpRequestBackend, LocalIpcBackend, NotificationBackend, SecretReadBackend,
-    SupervisorConnection, UriOpenBackend, WaylandClipboard, ZbusDesktopPortal, ZbusSecretService,
-    ZbusTransport, component_task_limit,
+    AppearanceProviderBackend, AuditFile, AuditFileLimits, COMPONENT_TASK_MARGIN, ClipboardBackend,
+    CommandRunBackend, ComponentCgroup, ConnectionExit, ConnectionIdentity, ConnectionLimits,
+    ContextReadBackend, DbusCallBackend, DbusSubscriptionBackend, FilesystemReadBackend,
+    FilesystemWriteBackend, GrantStoreWatcher, HttpRequestBackend, LocalIpcBackend, MediaBackend,
+    NotificationBackend, SecretReadBackend, SupervisorConnection, UriOpenBackend, WaylandClipboard,
+    ZbusDesktopPortal, ZbusSecretService, ZbusTransport, component_task_limit,
 };
 use touchbar_policy::{
     CapabilityId, CapabilityRegistry, CapabilityRequest, CapabilityScope, EffectivePolicy,
@@ -47,7 +47,7 @@ const ASSET_BUNDLE_FD_ENV: &str = "TOUCHBAR_ASSET_BUNDLE_FD";
 const APPEARANCE_SINK_FD_ENV: &str = "TOUCHBAR_APPEARANCE_SINK_FD";
 const MAX_COMPONENT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
-const USAGE: &str = "usage: touchbar-plugin-supervisor PACKAGE --host HOST --source github:OWNER/REPO --version VERSION --digest sha256:HEX [--package-digest sha256:HEX] [--appearance-provider ID] [--asset-digest ID=sha256:HEX]... --provenance verified-release|unverified-release|local-development --state DIRECTORY [--grants FILE] [--session-grants FILE] [--audit FILE] [-- HOST_ARGUMENTS...]";
+const USAGE: &str = "usage: touchbar-plugin-supervisor PACKAGE --host HOST --source github:OWNER/REPO --version VERSION --digest sha256:HEX [--package-digest sha256:HEX] [--appearance-provider ID] [--asset-digest ID=sha256:HEX]... --provenance verified-release|unverified-release|local-development --state DIRECTORY [--grants FILE] [--session-grants FILE] [--media-session FILE] [--audit FILE] [-- HOST_ARGUMENTS...]";
 
 struct Arguments {
     package: PathBuf,
@@ -62,6 +62,8 @@ struct Arguments {
     state: PathBuf,
     grants: Option<PathBuf>,
     session_grants: Option<PathBuf>,
+    /// The session daemon's now-playing player, followed by media.read.v1.
+    media_session: Option<PathBuf>,
     audit: Option<PathBuf>,
     host_arguments: Vec<String>,
 }
@@ -405,7 +407,7 @@ fn run_session(
         .transpose()?;
     let component_cgroup =
         ComponentCgroup::create(instance_id).context("create mandatory component-host cgroup")?;
-    let component_tasks = component_task_limit(32)?;
+    let component_tasks = component_task_limit(COMPONENT_TASK_MARGIN)?;
     let broker_source = inherited_descriptor.as_raw_fd();
     let component_source = inherited_component.as_raw_fd();
     let manifest_source = inherited_manifest.as_raw_fd();
@@ -569,6 +571,9 @@ fn run_session(
             .register_resource_backend(CapabilityId::LocalConnectV1, visual.local_ipc.clone());
         connection.register_backend(CapabilityId::ClipboardReadV1, visual.clipboard.clone());
         connection.register_backend(CapabilityId::ClipboardWriteV1, visual.clipboard.clone());
+        let media_backend = Arc::new(MediaBackend::new(arguments.media_session.clone()));
+        connection.register_resource_backend(CapabilityId::MediaReadV1, media_backend.clone());
+        connection.register_backend(CapabilityId::MediaControlV1, media_backend);
     }
     let exit = match watcher {
         Some((watcher, grants_path, session_grants_path)) => {
@@ -669,6 +674,7 @@ fn parse_arguments() -> Result<Arguments> {
     let mut state = None;
     let mut grants = None;
     let mut session_grants = None;
+    let mut media_session = None;
     let mut audit = None;
     let mut host_arguments = Vec::new();
     while let Some(argument) = values.next() {
@@ -740,6 +746,11 @@ fn parse_arguments() -> Result<Arguments> {
                     values.next().context("--session-grants requires FILE")?,
                 ))
             }
+            "--media-session" => {
+                media_session = Some(PathBuf::from(
+                    values.next().context("--media-session requires FILE")?,
+                ))
+            }
             "--audit" => {
                 audit = Some(PathBuf::from(
                     values.next().context("--audit requires FILE")?,
@@ -769,6 +780,7 @@ fn parse_arguments() -> Result<Arguments> {
         state: state.context("--state is required")?,
         grants,
         session_grants,
+        media_session,
         audit,
         host_arguments,
     })

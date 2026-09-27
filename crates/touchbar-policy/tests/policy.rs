@@ -13,9 +13,10 @@ use touchbar_policy::{
     CapabilityStatus, CommandArgument, CommandRule, CommandRunScope, DbusArgumentConstraint,
     DbusBus, DbusCallRule, DbusCallScope, Decision, EffectivePolicy, FilesystemMountBinding,
     FilesystemMountRequest, FilesystemReadScope, GrantRecord, GrantStore, HttpMethod,
-    HttpOriginRule, HttpRequestScope, PackageInstance, PermissionChangeKind, Provenance,
-    ReusePolicy, RiskClass, RuntimeKind, SessionGrants, UriOpenScope, calculate_effective_policy,
-    diff_permissions, normalize_manifest_permissions, summarize_trust, validate_capability_scope,
+    HttpOriginRule, HttpRequestScope, MediaControlAction, MediaControlScope, MediaReadScope,
+    PackageInstance, PermissionChangeKind, Provenance, ReusePolicy, RiskClass, RuntimeKind,
+    SessionGrants, UriOpenScope, calculate_effective_policy, diff_permissions,
+    normalize_manifest_permissions, summarize_trust, validate_capability_scope,
 };
 
 fn source() -> GithubSource {
@@ -275,6 +276,68 @@ suggested_location = "xdg-state:example/current"
     });
     assert!(narrower.is_subset_of(&requests[0].scope));
     assert!(!requests[0].scope.is_subset_of(&narrower));
+}
+
+#[test]
+fn media_permissions_split_seeing_from_controlling() {
+    let manifest = manifest_with_permissions(
+        r#"
+[[permission]]
+capability = "media.read.v1"
+required = false
+reason = "Show what is playing"
+[permission.scope]
+maximum_updates_per_second = 4
+
+[[permission]]
+capability = "media.control.v1"
+required = false
+reason = "Control playback"
+[permission.scope]
+actions = ["play-pause", "next", "seek"]
+"#,
+    );
+    let requests = normalize_manifest_permissions(&manifest).unwrap();
+    let read = requests
+        .iter()
+        .find(|request| request.capability == CapabilityId::MediaReadV1)
+        .unwrap();
+    let control = requests
+        .iter()
+        .find(|request| request.capability == CapabilityId::MediaControlV1)
+        .unwrap();
+    assert_eq!(read.scope.risk(&read.capability), RiskClass::Sensitive);
+    assert_eq!(
+        control.scope.risk(&control.capability),
+        RiskClass::Controlling
+    );
+
+    let slower = CapabilityScope::MediaRead(MediaReadScope {
+        maximum_updates_per_second: 1,
+    });
+    assert!(slower.is_subset_of(&read.scope));
+    assert!(!read.scope.is_subset_of(&slower));
+    let fewer = CapabilityScope::MediaControl(MediaControlScope {
+        actions: BTreeSet::from([MediaControlAction::PlayPause]),
+    });
+    assert!(fewer.is_subset_of(&control.scope));
+    let more = CapabilityScope::MediaControl(MediaControlScope {
+        actions: BTreeSet::from([MediaControlAction::PlayPause, MediaControlAction::Previous]),
+    });
+    assert!(!more.is_subset_of(&control.scope));
+
+    for invalid in [
+        "capability = \"media.control.v1\"\nrequired = false\nreason = \"x\"\n[permission.scope]\nactions = []\n",
+        "capability = \"media.control.v1\"\nrequired = false\nreason = \"x\"\n[permission.scope]\nactions = [\"raise\"]\n",
+        "capability = \"media.read.v1\"\nrequired = false\nreason = \"x\"\n[permission.scope]\nmaximum_updates_per_second = 0\n",
+        "capability = \"media.read.v1\"\nrequired = false\nreason = \"x\"\n[permission.scope]\nmaximum_updates_per_second = 31\n",
+    ] {
+        let manifest = manifest_with_permissions(&format!("[[permission]]\n{invalid}"));
+        assert!(
+            normalize_manifest_permissions(&manifest).is_err(),
+            "{invalid}"
+        );
+    }
 }
 
 #[test]
@@ -1102,7 +1165,7 @@ fn grant_store_rejects_invalid_typed_authority() {
 #[test]
 fn registry_and_effective_policy_are_machine_readable() {
     let registry = CapabilityRegistry::default();
-    assert_eq!(registry.supported().count(), 14);
+    assert_eq!(registry.supported().count(), 16);
     assert!(registry.supports(&CapabilityId::HttpRequestV1));
     let omitted = "input.synthesize.v1".parse::<CapabilityId>().unwrap();
     assert!(!omitted.is_known());

@@ -6,7 +6,10 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/lib/touchbar/touchbar-sessiond --hardware-socket /run/touchbar/hardware.sock --system-bar --hyprland-context
+# Each context source stands aside outside its desktop: Hyprland without
+# HYPRLAND_INSTANCE_SIGNATURE, GNOME without the Window Monitor Pro extension.
+# The media source only follows MPRIS players on the session bus.
+ExecStart=/usr/lib/touchbar/touchbar-sessiond --hardware-socket /run/touchbar/hardware.sock --system-bar --hyprland-context --gnome-context --media-context
 Restart=on-failure
 RestartSec=1
 

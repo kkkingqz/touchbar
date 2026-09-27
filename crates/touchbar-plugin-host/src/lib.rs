@@ -1344,22 +1344,51 @@ impl PluginHost {
             let Some(event) = event else {
                 break;
             };
-            self.refuel()?;
-            self.store.data_mut().phase = Some(CallbackPhase::HostEvent);
-            let event = to_wit_broker_event(event);
-            let result = self
-                .bindings
-                .call_handle_host_event(&mut self.store, &event)
-                .context("component host-event call failed");
-            self.store.data_mut().phase = None;
-            let update =
-                result?.map_err(|message| anyhow!("component rejected host event: {message}"))?;
-            if update.presentation.is_some() {
-                bail!("component requested a presentation outside a physical input callback");
-            }
-            rerender |= update.rerender;
+            rerender |= self.deliver_host_event(&to_wit_broker_event(event))?;
         }
         Ok(rerender)
+    }
+
+    /// Reports the initial state of every capability as a capability-change
+    /// event, once, before the first render. Broker work may start only in
+    /// input and host-event callbacks, so without this a component could not
+    /// open a subscription until the first touch.
+    pub fn announce_capabilities(&mut self) -> Result<bool> {
+        let Some(broker) = self.store.data().broker.as_ref() else {
+            return Ok(false);
+        };
+        let generation = broker.generation();
+        let events = broker
+            .states()
+            .iter()
+            .map(|state| {
+                wit_broker::HostEvent::CapabilityChanged((
+                    generation,
+                    to_wit_capability_state(state),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let mut rerender = false;
+        for event in &events {
+            rerender |= self.deliver_host_event(event)?;
+        }
+        Ok(rerender)
+    }
+
+    fn deliver_host_event(&mut self, event: &wit_broker::HostEvent) -> Result<bool> {
+        self.refuel()?;
+        self.store.data_mut().phase = Some(CallbackPhase::HostEvent);
+        let result = self
+            .bindings
+            .call_handle_host_event(&mut self.store, event)
+            .context("component host-event call failed");
+        self.store.data_mut().phase = None;
+        let update =
+            result?.map_err(|message| anyhow!("component rejected host event: {message}"))?;
+        if update.presentation.is_some() {
+            bail!("component requested a presentation outside a physical input callback");
+        }
+        Ok(update.rerender)
     }
 
     fn refuel(&mut self) -> Result<()> {

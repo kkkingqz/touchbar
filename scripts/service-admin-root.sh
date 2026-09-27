@@ -17,8 +17,40 @@ esac
 
 hardware_unit=/usr/lib/systemd/system/touchbar.service
 hardware_binary=/usr/lib/touchbar/touchbard
-if [[ ! -f /usr/lib/systemd/system/tiny-dfr.service && ! -f /etc/systemd/system/tiny-dfr.service ]]; then
-    echo "tiny-dfr.service is not installed, so a verified rollback target is unavailable" >&2
+t2_mode=/usr/lib/touchbar/touchbar-t2-mode
+t2_units=(touchbar-t2-display.service touchbar-t2-sleep.service)
+
+tiny_dfr_installed() {
+    [[ -f /usr/lib/systemd/system/tiny-dfr.service || -f /etc/systemd/system/tiny-dfr.service ]]
+}
+
+t2_touchbar_present() {
+    local device
+    for device in /sys/bus/usb/devices/*; do
+        [[ -f $device/idVendor && -f $device/idProduct ]] || continue
+        [[ $(<"$device/idVendor") == 05ac && $(<"$device/idProduct") == 8302 ]] && return 0
+    done
+    return 1
+}
+
+# An Intel T2 Touch Bar has a native configuration in which the T2 draws the
+# function row itself, so it needs no userspace owner to fall back to. The
+# device is briefly missing while it re-enumerates after a resume, so an
+# installation already activated for T2 keeps counting as one.
+t2=false
+if [[ -x $t2_mode ]] \
+    && { t2_touchbar_present || systemctl is-enabled --quiet touchbar-t2-sleep.service 2>/dev/null; }; then
+    t2=true
+fi
+
+# The owner the strip is handed back to. tiny-dfr keeps that role wherever it
+# is installed; without it only the T2's native configuration qualifies.
+if tiny_dfr_installed; then
+    fallback="tiny-dfr"
+elif [[ $t2 == true ]]; then
+    fallback="t2-native"
+else
+    echo "no rollback target: install tiny-dfr, or use an Intel T2 Touch Bar with touchbar-t2-mode" >&2
     exit 1
 fi
 
@@ -31,8 +63,31 @@ wait_hardware_stopped() {
         esac
         sleep 0.05
     done
-    echo "refusing to start tiny-dfr while touchbar.service state is ${state:-unknown}" >&2
+    echo "refusing to hand the Touch Bar to $fallback while touchbar.service state is ${state:-unknown}" >&2
     return 1
+}
+
+# Called only once touchbar.service is proven stopped.
+hand_back() {
+    case "$fallback" in
+        tiny-dfr)
+            systemctl unmask tiny-dfr.service
+            systemctl start tiny-dfr.service
+            systemctl is-active --quiet tiny-dfr.service
+            ;;
+        t2-native)
+            "$t2_mode" native
+            ;;
+    esac
+}
+
+release_hardware() {
+    rm -f -- /etc/touchbar/enabled
+    systemctl disable touchbar.service 2>/dev/null || true
+    # The T2 units are disabled unconditionally; that is harmless where they
+    # were never enabled.
+    systemctl disable "${t2_units[@]}" 2>/dev/null || true
+    systemctl stop touchbar.service 2>/dev/null || true
 }
 
 trigger_touchbar_display() {
@@ -68,14 +123,10 @@ trigger_touchbar_display() {
 }
 
 if [[ "$action" == "rollback" ]]; then
-    rm -f -- /etc/touchbar/enabled
-    systemctl disable touchbar.service || true
-    systemctl stop touchbar.service || true
+    release_hardware
     wait_hardware_stopped
-    systemctl unmask tiny-dfr.service
-    systemctl start tiny-dfr.service
-    systemctl is-active --quiet tiny-dfr.service
-    echo "hardware-service=rolled-back replacement=tiny-dfr.service"
+    hand_back
+    echo "hardware-service=rolled-back replacement=$fallback"
     exit 0
 fi
 
@@ -84,34 +135,48 @@ if [[ ! -f "$hardware_unit" || ! -x "$hardware_binary" ]]; then
     exit 1
 fi
 
-restore_tiny_dfr() {
+restore_fallback() {
     status=${1:-1}
     trap - EXIT INT TERM HUP
     if [[ $status -ne 0 ]]; then
-        rm -f -- /etc/touchbar/enabled
-        systemctl disable touchbar.service 2>/dev/null || true
-        systemctl stop touchbar.service 2>/dev/null || true
+        release_hardware
         if wait_hardware_stopped; then
-            systemctl unmask tiny-dfr.service 2>/dev/null || status=1
-            systemctl start tiny-dfr.service 2>/dev/null || status=1
+            hand_back 2>/dev/null || status=1
         else
-            echo "WARNING: tiny-dfr was not started because touchbard did not stop" >&2
+            echo "WARNING: $fallback was not restored because touchbard did not stop" >&2
             status=1
         fi
     fi
     exit "$status"
 }
-trap 'restore_tiny_dfr $?' EXIT
-trap 'restore_tiny_dfr 130' INT TERM HUP
+trap 'restore_fallback $?' EXIT
+trap 'restore_fallback 130' INT TERM HUP
 
-# tiny-dfr is also started directly by its udev rules. Disabling it is not
-# sufficient: masking is the deterministic ownership switch and is reversible.
-systemctl mask --now tiny-dfr.service
+if [[ $fallback == tiny-dfr ]]; then
+    # tiny-dfr is also started directly by its udev rules. Disabling it is not
+    # sufficient: masking is the deterministic ownership switch and is reversible.
+    systemctl mask --now tiny-dfr.service
+fi
 install -d -o root -g root -m 0755 /etc/touchbar
 install -o root -g root -m 0644 /dev/null /etc/touchbar/enabled
 systemctl daemon-reload
+if [[ $t2 == true ]]; then
+    udevadm control --reload-rules
+    # Native across every sleep, display again after each resume and at boot.
+    systemctl enable "${t2_units[@]}"
+    # touchbard needs the appletbdrm card, which only the display configuration has.
+    "$t2_mode" display
+fi
 trigger_touchbar_display
-systemctl enable --now touchbar.service
+if [[ $t2 == true ]]; then
+    # udev starts touchbard whenever the display configuration's card appears.
+    # Enabling it for multi-user.target would make every boot wait for a card
+    # that the native configuration the T2 boots in does not have.
+    systemctl disable touchbar.service 2>/dev/null || true
+    systemctl start touchbar.service
+else
+    systemctl enable --now touchbar.service
+fi
 systemctl is-active --quiet touchbar.service
 trap - EXIT INT TERM HUP
-echo "hardware-service=activated replacement=touchbar.service"
+echo "hardware-service=activated replacement=touchbar.service fallback=$fallback"

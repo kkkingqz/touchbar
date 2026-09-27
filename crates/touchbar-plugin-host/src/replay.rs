@@ -5512,6 +5512,7 @@ pub fn run(
     }
 
     let mut host = host;
+    host.announce_capabilities()?;
     let appearance = apply_appearance(Appearance::default(), &scenario.appearance, false)?;
     let viewport = Rect::new(0.0, 0.0, scenario.width as f32, 60.0);
     let ui = host.render_at(&scenario.item, viewport, appearance, Duration::ZERO)?;

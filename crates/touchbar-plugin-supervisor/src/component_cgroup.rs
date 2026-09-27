@@ -13,6 +13,15 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 const COMPONENT_PIDS_MAX: &[u8] = b"32";
+/// How many tasks above the user's current count a component host may reach.
+/// `RLIMIT_NPROC` counts every task of the user, not the host's own, so this
+/// margin is shared with every supervisor and host starting at the same time
+/// and with the rest of the desktop. At 32 it was used up when a session
+/// started several plugin items together, and Mesa could not start the one
+/// shader-compiler thread it needs to load the GPU driver. The per-host bound
+/// is the leaf's `pids.max`; this rlimit only keeps a runaway host from
+/// exhausting the user where the pids controller is not delegated.
+pub const COMPONENT_TASK_MARGIN: u64 = 1024;
 const COMPONENT_MEMORY_MAX: &[u8] = b"536870912";
 const COMPONENT_CPU_MAX: &[u8] = b"100000 100000";
 const COMPONENT_CGROUP_PREFIX: &str = "touchbar-component-";

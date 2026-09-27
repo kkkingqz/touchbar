@@ -30,10 +30,14 @@ for binary in touchbard touchbar-sessiond touchbarctl touchbar-plugin-host touch
 done
 for file in \
     packaging/systemd/touchbar.service \
+    packaging/systemd/touchbar-t2-display.service \
+    packaging/systemd/touchbar-t2-sleep.service \
     packaging/systemd/user/touchbar-session.service \
+    packaging/udev/90-touchbar-t2.rules \
     packaging/udev/99-touchbar.rules \
     assets/touchbar.png \
     scripts/service-admin-root.sh \
+    scripts/touchbar-t2-mode.sh \
     scripts/activate-installed-services.sh \
     scripts/rollback-to-tiny-dfr.sh; do
     require_regular "$source_root/$file"
@@ -55,6 +59,8 @@ install -o root -g root -m 0755 "$source_root/target/release/touchbarctl" /usr/b
 install -o root -g root -m 0755 \
     "$source_root/scripts/service-admin-root.sh" /usr/lib/touchbar/service-admin-root
 install -o root -g root -m 0755 \
+    "$source_root/scripts/touchbar-t2-mode.sh" /usr/lib/touchbar/touchbar-t2-mode
+install -o root -g root -m 0755 \
     "$source_root/scripts/activate-installed-services.sh" /usr/bin/touchbar-activate
 install -o root -g root -m 0755 \
     "$source_root/scripts/rollback-to-tiny-dfr.sh" /usr/bin/touchbar-rollback
@@ -62,10 +68,16 @@ install -o root -g root -m 0644 \
     "$source_root/assets/touchbar.png" /usr/share/touchbar/icon.png
 install -o root -g root -m 0644 \
     "$source_root/packaging/systemd/touchbar.service" /usr/lib/systemd/system/touchbar.service
+for unit in touchbar-t2-display.service touchbar-t2-sleep.service; do
+    install -o root -g root -m 0644 \
+        "$source_root/packaging/systemd/$unit" "/usr/lib/systemd/system/$unit"
+done
 install -o root -g root -m 0644 \
     "$source_root/packaging/systemd/user/touchbar-session.service" /usr/lib/systemd/user/touchbar-session.service
 install -o root -g root -m 0644 \
     "$source_root/packaging/udev/99-touchbar.rules" /usr/lib/udev/rules.d/99-touchbar.rules
+install -o root -g root -m 0644 \
+    "$source_root/packaging/udev/90-touchbar-t2.rules" /usr/lib/udev/rules.d/90-touchbar-t2.rules
 
 systemctl daemon-reload
 udevadm control --reload-rules

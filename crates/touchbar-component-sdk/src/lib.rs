@@ -36,8 +36,10 @@ pub use touchbar_broker_schema::{
     MAX_DIRECTORY_ENTRIES, MAX_FILE_CHUNK_BYTES, MAX_FILE_STREAM_BYTES,
     MAX_FILE_STREAM_CHUNK_BYTES, MAX_FILE_WRITE_BYTES, MAX_FILE_WRITE_STREAM_CHUNK_BYTES,
     MAX_HTTP_INLINE_BODY_BYTES, MAX_HTTP_STREAM_CHUNK_BYTES, MAX_LOCAL_FRAME_BYTES,
-    MAX_NOTIFICATION_BODY_BYTES, MAX_NOTIFICATION_TITLE_BYTES, MAX_URI_BYTES, NotificationRemove,
-    NotificationSend, NotificationUrgencyValue, SecretReadRequest, SecretValue, UriOpenRequest,
+    MAX_MEDIA_TEXT_BYTES, MAX_NOTIFICATION_BODY_BYTES, MAX_NOTIFICATION_TITLE_BYTES, MAX_URI_BYTES,
+    MediaAction, MediaCommand, MediaPlaybackStatus, MediaReadRequest, MediaSession, MediaState,
+    MediaSubscriptionOpened, NotificationRemove, NotificationSend, NotificationUrgencyValue,
+    SecretReadRequest, SecretValue, UriOpenRequest,
 };
 
 /// An asynchronous broker operation accepted by the trusted native host.
@@ -145,6 +147,12 @@ pub enum SecretSubmitError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContextSubmitError {
+    InvalidPayload,
+    Broker(broker::ErrorCode),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaSubmitError {
     InvalidPayload,
     Broker(broker::ErrorCode),
 }
@@ -529,6 +537,39 @@ pub fn filesystem_write_stream_commit(
         .encode()
         .map_err(|_| FilesystemSubmitError::InvalidPayload)?,
     )
+}
+
+/// Opens the now-playing subscription of `media.read.v1`. The completion
+/// carries the resource ID and the current state; every later state arrives
+/// as a resource event, including once per second while a track plays.
+pub fn media_subscribe() -> Result<RequestId, MediaSubmitError> {
+    let payload = MediaReadRequest
+        .encode()
+        .map_err(|_| MediaSubmitError::InvalidPayload)?;
+    request("media.read.v1", "subscribe", &payload).map_err(MediaSubmitError::Broker)
+}
+
+pub fn decode_media_subscription_opened(
+    payload: &[u8],
+) -> Result<(ResourceId, MediaState), touchbar_broker_schema::SchemaError> {
+    MediaSubscriptionOpened::decode(payload)
+        .map(|opened| (ResourceId(opened.resource_id), opened.state))
+}
+
+pub fn decode_media_state(
+    payload: &[u8],
+) -> Result<MediaState, touchbar_broker_schema::SchemaError> {
+    MediaState::decode(payload)
+}
+
+/// Sends one `media.control.v1` command to the player a session named. The
+/// broker requires a fresh physical activation: submit it from the
+/// `Activated` event of the button or slider the user touched.
+pub fn media_command(command: &MediaCommand) -> Result<RequestId, MediaSubmitError> {
+    let payload = command
+        .encode()
+        .map_err(|_| MediaSubmitError::InvalidPayload)?;
+    request("media.control.v1", "command", &payload).map_err(MediaSubmitError::Broker)
 }
 
 /// Submit one typed `dbus.call.v1` operation. The host reconstructs the D-Bus

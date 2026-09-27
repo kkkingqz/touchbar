@@ -463,6 +463,16 @@ impl TouchInput {
     }
 }
 
+/// The Intel T2 digitizer: the hid-multitouch interface of the Touch Bar's
+/// display configuration. Apple silicon names it after the machine instead
+/// ("MacBookPro17,1 Touch Bar").
+const T2_TOUCH_BAR_DIGITIZER: &str = "Apple Inc. Touch Bar Display Touchpad";
+
+fn is_touchbar_digitizer(name: &str) -> bool {
+    let name = name.trim();
+    name.ends_with("Touch Bar") || name == T2_TOUCH_BAR_DIGITIZER
+}
+
 fn find_touchbar_input() -> Result<PathBuf> {
     let entries = std::fs::read_dir("/sys/class/input").context("read input device list")?;
     for entry in entries.flatten() {
@@ -475,7 +485,7 @@ fn find_touchbar_input() -> Result<PathBuf> {
         }
         let device_name =
             std::fs::read_to_string(entry.path().join("device/name")).unwrap_or_default();
-        if device_name.trim().ends_with("Touch Bar") {
+        if is_touchbar_digitizer(&device_name) {
             return Ok(Path::new("/dev/input").join(name));
         }
     }
@@ -577,7 +587,12 @@ fn parse_args() -> Args {
     }
 }
 
-fn find_adp_card() -> Result<PathBuf> {
+/// Kernel DRM drivers that expose the Touch Bar panel: the Apple silicon `adp`
+/// display pipe, and the Intel T2 USB display `appletbdrm`, which exists only
+/// while the Touch Bar is in its display configuration (USB configuration 2).
+const TOUCHBAR_DRM_DRIVERS: &[&str] = &["adp", "appletbdrm"];
+
+fn find_touchbar_card() -> Result<(PathBuf, &'static str)> {
     let mut cards = std::fs::read_dir("/sys/class/drm")?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| {
@@ -592,18 +607,30 @@ fn find_adp_card() -> Result<PathBuf> {
     cards.sort();
 
     for card in cards {
-        let driver = std::fs::canonicalize(card.join("device/driver"));
-        if driver
+        let driver = std::fs::canonicalize(card.join("device/driver"))
             .ok()
-            .and_then(|path| path.file_name().map(OsStr::to_owned))
-            .as_deref()
-            == Some(OsStr::new("adp"))
-        {
-            let name = card.file_name().context("ADP sysfs card has no filename")?;
-            return Ok(Path::new("/dev/dri").join(name));
-        }
+            .and_then(|path| path.file_name().map(OsStr::to_owned));
+        let Some(driver) = TOUCHBAR_DRM_DRIVERS
+            .iter()
+            .copied()
+            .find(|known| driver.as_deref() == Some(OsStr::new(known)))
+        else {
+            continue;
+        };
+        let name = card
+            .file_name()
+            .context("Touch Bar sysfs card has no filename")?;
+        return Ok((Path::new("/dev/dri").join(name), driver));
     }
-    bail!("no DRM card driven by the Apple ADP driver was found")
+    bail!("no DRM card driven by adp or appletbdrm was found")
+}
+
+/// `adp` drives the panel over DSI; `appletbdrm` registers a USB connector.
+fn is_touchbar_connector(interface: connector::Interface) -> bool {
+    matches!(
+        interface,
+        connector::Interface::DSI | connector::Interface::USB
+    )
 }
 
 fn select_touchbar(card: &Card, force_probe: bool) -> Result<Selection> {
@@ -614,13 +641,13 @@ fn select_touchbar(card: &Card, force_probe: bool) -> Result<Selection> {
         .filter_map(|handle| card.get_connector(*handle, force_probe).ok())
         .find(|info| {
             info.state() == connector::State::Connected
-                && info.interface() == connector::Interface::DSI
+                && is_touchbar_connector(info.interface())
                 && info
                     .modes()
                     .first()
                     .is_some_and(|mode| mode.size().1 / mode.size().0 >= 30)
         })
-        .context("no connected portrait DSI Touch Bar connector was found")?;
+        .context("no connected portrait Touch Bar connector was found")?;
     let mode = *connector
         .modes()
         .first()
@@ -674,7 +701,7 @@ fn select_touchbar(card: &Card, force_probe: bool) -> Result<Selection> {
 fn print_selection(node: &Path, selection: &Selection) {
     let (width, height) = selection.mode.size();
     println!(
-        "adp-node={} connector={} connector_id={} crtc_id={} crtc_index={} plane_id={} mode={}x{} refresh_hz={}",
+        "touchbar-node={} connector={} connector_id={} crtc_id={} crtc_index={} plane_id={} mode={}x{} refresh_hz={}",
         node.display(),
         selection.connector,
         u32::from(selection.connector.handle()),
@@ -1411,8 +1438,9 @@ impl ServiceHardware {
         let card = Card::open(node, true)?;
         card.set_client_capability(ClientCapability::UniversalPlanes, true)?;
         card.set_client_capability(ClientCapability::Atomic, true)?;
-        card.acquire_master_lock()
-            .context("acquire persistent ADP DRM master; tiny-dfr must be stopped first")?;
+        card.acquire_master_lock().context(
+            "acquire persistent Touch Bar DRM master; stop any other owner (tiny-dfr) first",
+        )?;
         let selection = select_touchbar(&card, true)?;
         print_selection(node, &selection);
         let (display_width, display_height) = selection.mode.size();
@@ -2171,8 +2199,10 @@ fn run_hardware_session(
     print_selection(node, &selection);
     let (display_width, display_height) = selection.mode.size();
     // The panel's own orientation decides the logical mapping. A portrait
-    // scanout (Apple silicon `adp`) is a quarter turn of the landscape scene;
-    // an already landscape panel (Intel T2 `appletbdrm`) needs no rotation.
+    // scanout is a quarter turn of the landscape scene; an already landscape
+    // panel would need no rotation. Both known drivers scan out portrait:
+    // Apple silicon `adp` natively, and Intel T2 `appletbdrm` because it swaps
+    // the device's axes (tiny-dfr's 64-wide rotated buffer works on both).
     // The compositor derives the same transform from these four numbers.
     let (logical_width, logical_height) = if display_height > display_width {
         (u32::from(display_height), u32::from(display_width))
@@ -2596,8 +2626,11 @@ fn main() -> Result<()> {
         );
         return Ok(());
     }
-    let node = find_adp_card()?;
-    println!("discovered-adp-node={}", node.display());
+    let (node, driver) = find_touchbar_card()?;
+    println!(
+        "discovered-touchbar-node={} driver={driver}",
+        node.display()
+    );
     match args.action {
         Action::Serve => serve(
             &node,
@@ -2606,7 +2639,7 @@ fn main() -> Result<()> {
                 .context("hardware service requires --socket PATH")?,
         ),
         Action::SysfsProbe => {
-            println!("probe=ok driver=adp state=unchanged");
+            println!("probe=ok driver={driver} state=unchanged");
             Ok(())
         }
         Action::KmsProbe => {
@@ -2850,6 +2883,29 @@ mod tests {
         assert_eq!(&target[top_left..top_left + 4], &[0, 0, 255, 255]);
         assert_eq!(&target[top_right..top_right + 4], &[255, 0, 0, 255]);
         assert_eq!(&target[bottom_left..bottom_left + 4], &[0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn recognizes_apple_silicon_and_t2_digitizers() {
+        assert!(is_touchbar_digitizer("MacBookPro17,1 Touch Bar"));
+        assert!(is_touchbar_digitizer("Mac14,7 Touch Bar\n"));
+        assert!(is_touchbar_digitizer(
+            "Apple Inc. Touch Bar Display Touchpad\n"
+        ));
+        // The native-mode keyboard of the same T2 device carries no touches.
+        assert!(!is_touchbar_digitizer("Apple Inc. Touch Bar Display"));
+        assert!(!is_touchbar_digitizer(
+            "Apple Inc. Apple Internal Keyboard / Trackpad"
+        ));
+    }
+
+    #[test]
+    fn accepts_the_dsi_and_usb_touchbar_connectors() {
+        assert!(is_touchbar_connector(connector::Interface::DSI));
+        assert!(is_touchbar_connector(connector::Interface::USB));
+        assert!(!is_touchbar_connector(
+            connector::Interface::EmbeddedDisplayPort
+        ));
     }
 
     #[test]

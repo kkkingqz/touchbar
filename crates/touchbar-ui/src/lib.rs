@@ -686,6 +686,8 @@ pub struct Contact {
     pub time: Duration,
 }
 
+/// `Activated` is a button released inside its bounds, or a slider released
+/// anywhere after its final `ValueChanged`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum UiEvent {
     Pressed { id: WidgetId },
@@ -747,8 +749,14 @@ impl InteractionState {
                 };
                 let mut events = Vec::new();
                 match capture.target.kind {
+                    // Lifting the finger commits the value, wherever it is:
+                    // the final value, then the activation that carries the
+                    // touch's authority for work such as a media seek.
                     InteractionKind::Slider => {
                         events.push(slider_event(capture.target, contact.position));
+                        events.push(UiEvent::Activated {
+                            id: capture.target.id,
+                        });
                     }
                     InteractionKind::Button { .. }
                         if !capture.long_press_sent
@@ -2450,6 +2458,31 @@ mod tests {
                 id: WidgetId(2),
                 value: 1.0
             }]
+        );
+    }
+
+    #[test]
+    fn releasing_a_slider_commits_its_final_value() {
+        let mut map = InteractionMap::default();
+        map.slider(WidgetId(2), Rect::new(10.0, 0.0, 100.0, 40.0));
+        let mut state = InteractionState::default();
+        state.handle(&map, contact(3, ContactPhase::Down, 60.0, 0));
+        assert_eq!(
+            state.handle(&map, contact(3, ContactPhase::Up, 35.0, 10)),
+            [
+                UiEvent::ValueChanged {
+                    id: WidgetId(2),
+                    value: 0.25
+                },
+                UiEvent::Activated { id: WidgetId(2) },
+                UiEvent::Released { id: WidgetId(2) },
+            ]
+        );
+        state.handle(&map, contact(4, ContactPhase::Down, 60.0, 20));
+        assert_eq!(
+            state.handle(&map, contact(4, ContactPhase::Cancel, 60.0, 30)),
+            [UiEvent::Cancelled { id: WidgetId(2) }],
+            "a cancelled touch commits nothing"
         );
     }
 

@@ -290,6 +290,25 @@ impl LiveProfiles {
         Ok(raw.map(|snapshot| self.normalize(snapshot)))
     }
 
+    pub fn has_fact(&self, key: &str) -> bool {
+        self.context.facts.contains_key(key)
+    }
+
+    /// Withdraws a fact entirely, so `present` predicates stop matching it.
+    pub fn remove_fact(&mut self, key: &str) -> Result<Option<ProfileCompositionSnapshot>> {
+        if self.context.facts.remove(key).is_none() {
+            return Ok(None);
+        }
+        self.context.generation = self.context.generation.wrapping_add(1).max(1);
+        let Some(controller) = &mut self.controller else {
+            return Ok(None);
+        };
+        let raw = controller
+            .apply(ControllerCommand::SetContext(self.context.clone()))?
+            .cloned();
+        Ok(raw.map(|snapshot| self.normalize(snapshot)))
+    }
+
     pub fn capture_started(&mut self, contact_id: u32) {
         self.captured_contacts.insert(contact_id);
         if let Some(controller) = &mut self.controller {

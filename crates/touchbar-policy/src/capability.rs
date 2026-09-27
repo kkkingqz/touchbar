@@ -39,6 +39,10 @@ pub enum CapabilityId {
     LocalConnectV1,
     #[serde(rename = "appearance.provide.v1")]
     AppearanceProvideV1,
+    #[serde(rename = "media.read.v1")]
+    MediaReadV1,
+    #[serde(rename = "media.control.v1")]
+    MediaControlV1,
     #[serde(untagged)]
     Unknown(String),
 }
@@ -72,6 +76,8 @@ impl CapabilityRegistry {
                 CapabilityId::UriOpenV1,
                 CapabilityId::LocalConnectV1,
                 CapabilityId::AppearanceProvideV1,
+                CapabilityId::MediaReadV1,
+                CapabilityId::MediaControlV1,
             ]),
         }
     }
@@ -121,6 +127,8 @@ impl fmt::Display for CapabilityId {
             Self::UriOpenV1 => "uri.open.v1",
             Self::LocalConnectV1 => "local.connect.v1",
             Self::AppearanceProvideV1 => "appearance.provide.v1",
+            Self::MediaReadV1 => "media.read.v1",
+            Self::MediaControlV1 => "media.control.v1",
             Self::Unknown(value) => value,
         })
     }
@@ -145,6 +153,8 @@ impl FromStr for CapabilityId {
             "uri.open.v1" => Self::UriOpenV1,
             "local.connect.v1" => Self::LocalConnectV1,
             "appearance.provide.v1" => Self::AppearanceProvideV1,
+            "media.read.v1" => Self::MediaReadV1,
+            "media.control.v1" => Self::MediaControlV1,
             _ if valid_dotted_id(value) => Self::Unknown(value.into()),
             _ => return Err("capability must be a lowercase dotted identifier".into()),
         };
@@ -213,6 +223,8 @@ pub enum CapabilityScope {
     UriOpen(UriOpenScope),
     LocalConnect(LocalConnectScope),
     AppearanceProvide(AppearanceProvideScope),
+    MediaRead(MediaReadScope),
+    MediaControl(MediaControlScope),
     Unknown(String),
 }
 
@@ -585,6 +597,41 @@ impl Default for AppearanceProvideScope {
     }
 }
 
+/// Authority to follow the now-playing media session: which player, what it
+/// plays and how far it is. Titles can be private, such as a video's name.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MediaReadScope {
+    pub maximum_updates_per_second: u16,
+}
+
+impl Default for MediaReadScope {
+    fn default() -> Self {
+        Self {
+            maximum_updates_per_second: 4,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MediaControlAction {
+    PlayPause,
+    Play,
+    Pause,
+    Next,
+    Previous,
+    Seek,
+}
+
+/// Authority to control the now-playing media session. Every command also
+/// needs a fresh touch on the component's own control.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MediaControlScope {
+    pub actions: BTreeSet<MediaControlAction>,
+}
+
 impl Default for LocalConnectScope {
     fn default() -> Self {
         Self {
@@ -758,6 +805,12 @@ fn normalize_permission(
         CapabilityId::AppearanceProvideV1 => {
             decode_scope::<AppearanceProvideScope>(permission, &field)
                 .map(CapabilityScope::AppearanceProvide)
+        }
+        CapabilityId::MediaReadV1 => {
+            decode_scope::<MediaReadScope>(permission, &field).map(CapabilityScope::MediaRead)
+        }
+        CapabilityId::MediaControlV1 => {
+            decode_scope::<MediaControlScope>(permission, &field).map(CapabilityScope::MediaControl)
         }
         CapabilityId::Unknown(_) => Ok(CapabilityScope::Unknown(encoded_scope)),
     }
@@ -1152,6 +1205,18 @@ fn validate_scope(
             );
             validate_kebab_set(&value.providers, "appearance provider", &mut issue);
         }
+        CapabilityScope::MediaRead(value) => {
+            validate_rate(value.maximum_updates_per_second, &mut issue);
+            require_at_most(
+                value.maximum_updates_per_second,
+                30,
+                "maximum_updates_per_second",
+                &mut issue,
+            );
+        }
+        CapabilityScope::MediaControl(value) => {
+            require_nonempty(&value.actions, "actions", &mut issue);
+        }
         CapabilityScope::Unknown(_) => {}
     }
     if !scope.matches_capability(capability) {
@@ -1202,6 +1267,8 @@ impl CapabilityScope {
                     CapabilityId::AppearanceProvideV1,
                     Self::AppearanceProvide(_)
                 )
+                | (CapabilityId::MediaReadV1, Self::MediaRead(_))
+                | (CapabilityId::MediaControlV1, Self::MediaControl(_))
                 | (CapabilityId::Unknown(_), Self::Unknown(_))
         )
     }
@@ -1277,6 +1344,12 @@ impl CapabilityScope {
                     && new.maximum_file_bytes <= old.maximum_file_bytes
                     && new.maximum_updates_per_second <= old.maximum_updates_per_second
             }
+            (Self::MediaRead(new), Self::MediaRead(old)) => {
+                new.maximum_updates_per_second <= old.maximum_updates_per_second
+            }
+            (Self::MediaControl(new), Self::MediaControl(old)) => {
+                new.actions.is_subset(&old.actions)
+            }
             (Self::Unknown(new), Self::Unknown(old)) => new == old,
             _ => false,
         }
@@ -1292,7 +1365,7 @@ impl CapabilityScope {
                 }
                 _ => RiskClass::Sensitive,
             },
-            CapabilityId::DbusSubscribeV1 => RiskClass::Sensitive,
+            CapabilityId::DbusSubscribeV1 | CapabilityId::MediaReadV1 => RiskClass::Sensitive,
             CapabilityId::HttpRequestV1 => RiskClass::Connected,
             CapabilityId::FilesystemReadV1
             | CapabilityId::ClipboardReadV1
@@ -1302,7 +1375,9 @@ impl CapabilityScope {
             | CapabilityId::ClipboardWriteV1
             | CapabilityId::NotificationSendV1
             | CapabilityId::UriOpenV1 => RiskClass::Controlling,
-            CapabilityId::AppearanceProvideV1 => RiskClass::Controlling,
+            CapabilityId::AppearanceProvideV1 | CapabilityId::MediaControlV1 => {
+                RiskClass::Controlling
+            }
             CapabilityId::CommandRunV1 => match self {
                 Self::CommandRun(scope) if scope.commands.iter().any(command_is_interpreter) => {
                     RiskClass::EffectivelyTrusted

@@ -17,7 +17,8 @@ pkgbase = touchbar-git
 	depends = mesa
 	depends = libinput
 	depends = dbus
-	depends = tiny-dfr
+	depends_aarch64 = tiny-dfr
+	optdepends_x86_64 = tiny-dfr: alternative rollback target to the native T2 function row
 	provides = touchbar=0.1.0.r0.g0000000
 	conflicts = touchbar
 	source = touchbar::git+https://github.com/cameroncooper/touchbar.git

@@ -1,8 +1,12 @@
 use std::{
     collections::BTreeMap,
-    ffi::c_void,
-    mem,
-    os::fd::{AsRawFd, OwnedFd},
+    ffi::{CStr, c_char, c_void},
+    fs, mem,
+    os::{
+        fd::{AsRawFd, OwnedFd},
+        unix::fs::MetadataExt,
+    },
+    path::{Path, PathBuf},
     ptr,
 };
 
@@ -24,6 +28,8 @@ const EGL_DMA_BUF_PLANE0_PITCH_EXT: egl::Attrib = 0x3274;
 const EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT: egl::Attrib = 0x3443;
 const EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT: egl::Attrib = 0x3444;
 const EGL_PLATFORM_SURFACELESS_MESA: egl::Enum = 0x31dd;
+const EGL_PLATFORM_DEVICE_EXT: egl::Enum = 0x313f;
+const EGL_DRM_RENDER_NODE_FILE_EXT: egl::Int = 0x3377;
 const EGL_SYNC_NATIVE_FENCE_ANDROID: egl::Enum = 0x3144;
 const EGL_SYNC_NATIVE_FENCE_FD_ANDROID: egl::Attrib = 0x3145;
 
@@ -48,6 +54,118 @@ struct SyncFileInfo {
 const _: () = assert!(mem::size_of::<SyncFileInfo>() == 56);
 
 type ImageTargetTexture = unsafe extern "system" fn(u32, *mut c_void);
+type EglDevice = *mut c_void;
+type QueryDevices =
+    unsafe extern "system" fn(egl::Int, *mut EglDevice, *mut egl::Int) -> egl::Boolean;
+type QueryDeviceString = unsafe extern "system" fn(EglDevice, egl::Int) -> *const c_char;
+
+/// The DRM render node that the compositor renders on and offers clients for
+/// their buffers. Both must be the same GPU: a buffer from one GPU generally
+/// cannot be imported by the other, whose pitch and tiling rules differ.
+///
+/// `TOUCHBAR_RENDER_NODE` chooses it. Otherwise it is the GPU that started the
+/// display at boot (`boot_vga`), which on a laptop with switchable graphics is
+/// the integrated one, so the discrete GPU is not woken for the Touch Bar.
+/// Without such a GPU, as on Apple silicon, it is the first render node.
+pub fn select_render_node() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("TOUCHBAR_RENDER_NODE") {
+        return Ok(PathBuf::from(path));
+    }
+    let nodes = fs::read_dir("/dev/dri")
+        .context("read /dev/dri for a render node")?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("renderD"))
+        })
+        .collect::<Vec<_>>();
+    preferred_render_node(nodes, boots_display).context("no DRM render node is available")
+}
+
+fn preferred_render_node(
+    mut nodes: Vec<PathBuf>,
+    boots_display: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    nodes.sort();
+    let boot = nodes.iter().position(|node| boots_display(node));
+    boot.map(|index| nodes.swap_remove(index))
+        .or_else(|| nodes.into_iter().next())
+}
+
+fn boots_display(render_node: &Path) -> bool {
+    render_node.file_name().is_some_and(|name| {
+        fs::read_to_string(
+            Path::new("/sys/class/drm")
+                .join(name)
+                .join("device/boot_vga"),
+        )
+        .is_ok_and(|value| value.trim() == "1")
+    })
+}
+
+/// EGL's display for one render node through EGL_EXT_platform_device, or
+/// `None` without that extension, a device for the node, or a display for it.
+fn device_display(
+    egl: &egl::DynamicInstance<egl::EGL1_5>,
+    render_node: &Path,
+) -> Result<Option<egl::Display>> {
+    let client_extensions = egl
+        .query_string(None, egl::EXTENSIONS)
+        .map(|extensions| extensions.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if !client_extensions
+        .split_whitespace()
+        .any(|extension| extension == "EGL_EXT_platform_device")
+    {
+        return Ok(None);
+    }
+    let (Some(query_devices), Some(query_device_string)) = (
+        egl.get_proc_address("eglQueryDevicesEXT"),
+        egl.get_proc_address("eglQueryDeviceStringEXT"),
+    ) else {
+        return Ok(None);
+    };
+    // SAFETY: the addresses were returned for these exact extension functions.
+    let query_devices =
+        unsafe { mem::transmute::<unsafe extern "system" fn(), QueryDevices>(query_devices) };
+    let query_device_string = unsafe {
+        mem::transmute::<unsafe extern "system" fn(), QueryDeviceString>(query_device_string)
+    };
+    let wanted = fs::metadata(render_node)
+        .with_context(|| format!("stat DRM render node {}", render_node.display()))?
+        .rdev();
+    let mut devices = [ptr::null_mut(); 16];
+    let mut count = 0;
+    // SAFETY: both output arrays are valid for the supplied capacity.
+    if unsafe { query_devices(devices.len() as egl::Int, devices.as_mut_ptr(), &mut count) }
+        != egl::TRUE
+    {
+        return Ok(None);
+    }
+    for device in devices.into_iter().take(count.max(0) as usize) {
+        // SAFETY: device came from eglQueryDevicesEXT; a null result means the
+        // device has no render node.
+        let node = unsafe { query_device_string(device, EGL_DRM_RENDER_NODE_FILE_EXT) };
+        if node.is_null() {
+            continue;
+        }
+        // SAFETY: EGL returns a NUL-terminated string that lives with the device.
+        let node = unsafe { CStr::from_ptr(node) }
+            .to_string_lossy()
+            .into_owned();
+        if fs::metadata(&node).is_ok_and(|metadata| metadata.rdev() == wanted) {
+            // SAFETY: EGL_EXT_platform_device defines EGLDeviceEXT as the
+            // native display for this platform value. A driver that refuses
+            // it leaves the surfaceless fallback.
+            return Ok(unsafe {
+                egl.get_platform_display(EGL_PLATFORM_DEVICE_EXT, device, &[egl::ATTRIB_NONE])
+            }
+            .ok());
+        }
+    }
+    Ok(None)
+}
 
 pub struct CompletionFence(glow::Fence);
 
@@ -104,7 +222,7 @@ pub struct GpuCompositor {
 }
 
 impl GpuCompositor {
-    pub fn new(width: u32, height: u32) -> Result<Self> {
+    pub fn new(width: u32, height: u32, render_node: &Path) -> Result<Self> {
         // SAFETY: libEGL is loaded through its stable ABI.
         let egl = unsafe {
             egl::DynamicInstance::<egl::EGL1_5>::load_required().context("load libEGL.so.1")?
@@ -115,20 +233,37 @@ impl GpuCompositor {
         // The session daemon is a headless compositor. Selecting EGL's default
         // display can bind it to X11 whenever DISPLAY is inherited, which in
         // turn creates an accidental dependency on the host /tmp/.X11-unix
-        // socket and breaks PrivateTmp isolation. Mesa's surfaceless platform
-        // selects the local render device without any window-system socket.
-        // SAFETY: the surfaceless platform requires EGL_DEFAULT_DISPLAY and no
-        // native-display object; the attribute list is correctly terminated.
-        let display = unsafe {
-            egl.get_platform_display(
-                EGL_PLATFORM_SURFACELESS_MESA,
-                egl::DEFAULT_DISPLAY,
-                &[egl::ATTRIB_NONE],
-            )
-        }
-        .context("obtain surfaceless compositor EGL display")?;
-        egl.initialize(display)
-            .context("initialize compositor EGL")?;
+        // socket and breaks PrivateTmp isolation. The device platform opens
+        // exactly the render node offered to clients; Mesa's surfaceless
+        // platform, the fallback, picks whichever GPU it enumerates first.
+        let display = match device_display(&egl, render_node)? {
+            Some(display) if egl.initialize(display).is_ok() => display,
+            device => {
+                let reason = if device.is_some() {
+                    "egl-device-failed"
+                } else {
+                    "no-egl-device"
+                };
+                eprintln!(
+                    "compositor-device=surfaceless reason={reason} render_node={}",
+                    render_node.display()
+                );
+                // SAFETY: the surfaceless platform requires EGL_DEFAULT_DISPLAY
+                // and no native-display object; the attribute list is
+                // correctly terminated.
+                let display = unsafe {
+                    egl.get_platform_display(
+                        EGL_PLATFORM_SURFACELESS_MESA,
+                        egl::DEFAULT_DISPLAY,
+                        &[egl::ATTRIB_NONE],
+                    )
+                }
+                .context("obtain surfaceless compositor EGL display")?;
+                egl.initialize(display)
+                    .context("initialize compositor EGL")?;
+                display
+            }
+        };
 
         let extensions = egl
             .query_string(Some(display), egl::EXTENSIONS)
@@ -1051,9 +1186,12 @@ impl Drop for GpuCompositor {
 
 #[cfg(test)]
 mod tests {
-    use std::os::fd::{FromRawFd as _, OwnedFd};
+    use std::{
+        os::fd::{FromRawFd as _, OwnedFd},
+        path::{Path, PathBuf},
+    };
 
-    use super::{SYNC_IOC_FILE_INFO, validate_sync_file};
+    use super::{SYNC_IOC_FILE_INFO, preferred_render_node, validate_sync_file};
 
     #[test]
     fn sync_file_ioctl_matches_linux_uapi() {
@@ -1070,5 +1208,32 @@ mod tests {
 
         let error = validate_sync_file(&fd).expect_err("eventfd must not pass as sync_file");
         assert!(error.to_string().contains("fd is not a Linux sync_file"));
+    }
+
+    #[test]
+    fn the_gpu_that_booted_the_display_renders_else_the_first_node() {
+        let nodes = || {
+            vec![
+                PathBuf::from("/dev/dri/renderD129"),
+                PathBuf::from("/dev/dri/renderD128"),
+            ]
+        };
+        // A MacBook with switchable graphics boots its display on Intel.
+        let intel = |node: &Path| node.ends_with("renderD128");
+        assert_eq!(
+            preferred_render_node(nodes(), intel),
+            Some(PathBuf::from("/dev/dri/renderD128"))
+        );
+        let amd = |node: &Path| node.ends_with("renderD129");
+        assert_eq!(
+            preferred_render_node(nodes(), amd),
+            Some(PathBuf::from("/dev/dri/renderD129"))
+        );
+        // Apple silicon has no boot_vga at all.
+        assert_eq!(
+            preferred_render_node(nodes(), |_| false),
+            Some(PathBuf::from("/dev/dri/renderD128"))
+        );
+        assert_eq!(preferred_render_node(Vec::new(), |_| true), None);
     }
 }

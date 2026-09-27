@@ -4,7 +4,7 @@ post_install() {
 TouchBar is installed but inactive. Installation alone never takes over the
 Touch Bar: the services start only once a root-owned marker exists.
 
-To take over the Touch Bar (this masks tiny-dfr):
+To take over the Touch Bar (this masks tiny-dfr where it is installed):
 
     touchbar-activate
 
@@ -24,7 +24,7 @@ post_upgrade() {
 
 pre_remove() {
     if [ -f /etc/touchbar/enabled ]; then
-        echo "Handing the Touch Bar back to tiny-dfr before removal."
+        echo "Handing the Touch Bar back before removal."
         touchbar-rollback || true
     fi
 }

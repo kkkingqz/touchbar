@@ -42,6 +42,10 @@ const CONTEXT_READ_MAGIC: [u8; 8] = *b"OMCTXRQ1";
 const CONTEXT_SNAPSHOT_MAGIC: [u8; 8] = *b"OMCTXSN1";
 const CONTEXT_OPENED_MAGIC: [u8; 8] = *b"OMCTXOP1";
 const APPEARANCE_PUBLISH_MAGIC: [u8; 8] = *b"OMAPPPB1";
+const MEDIA_READ_MAGIC: [u8; 8] = *b"OMMEDRQ1";
+const MEDIA_STATE_MAGIC: [u8; 8] = *b"OMMEDST1";
+const MEDIA_OPENED_MAGIC: [u8; 8] = *b"OMMEDOP1";
+const MEDIA_COMMAND_MAGIC: [u8; 8] = *b"OMMEDCM1";
 const HTTP_REQUEST_MAGIC: [u8; 8] = *b"OMHTTPQ1";
 const HTTP_RESPONSE_MAGIC: [u8; 8] = *b"OMHTTPR1";
 const HTTP_STREAM_OPENED_MAGIC: [u8; 8] = *b"OMHTTPO1";
@@ -75,6 +79,8 @@ pub const MAX_CLIPBOARD_BYTES: usize = 48 * 1024;
 pub const MAX_CLIPBOARD_MIME_BYTES: usize = 128;
 pub const MAX_CONTEXT_FACTS: usize = 32;
 pub const MAX_CONTEXT_VALUE_BYTES: usize = 256;
+/// Titles, artists and player names are cut to this by the broker.
+pub const MAX_MEDIA_TEXT_BYTES: usize = 512;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AppearanceScheme {
@@ -338,6 +344,322 @@ fn decode_context_snapshot(
     }
     decoder.finish()?;
     Ok((resource_id, ContextSnapshot { generation, facts }))
+}
+
+/// Opens the now-playing subscription of `media.read.v1`. It has no options
+/// yet; the magic keeps the request versioned like every other payload.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MediaReadRequest;
+
+impl MediaReadRequest {
+    pub fn encode(&self) -> Result<Vec<u8>, SchemaError> {
+        Encoder::new(MEDIA_READ_MAGIC).finish()
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, SchemaError> {
+        Decoder::new(bytes, MEDIA_READ_MAGIC)?.finish()?;
+        Ok(Self)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaPlaybackStatus {
+    Playing,
+    Paused,
+    Stopped,
+}
+
+/// The one media session the Touch Bar controls: the player that most
+/// recently started playing, kept while it is paused.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MediaSession {
+    /// The player's MPRIS bus name. Commands name the player with it.
+    pub player: String,
+    /// The application's own name, such as "VLC media player".
+    pub identity: String,
+    pub status: MediaPlaybackStatus,
+    /// Opaque; `MediaAction::SetPosition` repeats it so that a seek meant for
+    /// one track never lands in the next. Empty if the player has none.
+    pub track_id: String,
+    pub title: String,
+    /// Every artist, joined with ", ".
+    pub artist: String,
+    pub album: String,
+    pub length_micros: Option<u64>,
+    /// The position when the state was sent; absent if the player does not
+    /// report one.
+    pub position_micros: Option<u64>,
+    pub can_play: bool,
+    pub can_pause: bool,
+    pub can_go_next: bool,
+    pub can_go_previous: bool,
+    pub can_seek: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MediaState {
+    /// Increases with every state sent; never zero.
+    pub generation: u64,
+    pub session: Option<MediaSession>,
+}
+
+impl MediaState {
+    pub fn encode(&self) -> Result<Vec<u8>, SchemaError> {
+        let mut encoder = Encoder::new(MEDIA_STATE_MAGIC);
+        encode_media_state(&mut encoder, self)?;
+        encoder.finish()
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, SchemaError> {
+        let mut decoder = Decoder::new(bytes, MEDIA_STATE_MAGIC)?;
+        let state = decode_media_state(&mut decoder)?;
+        decoder.finish()?;
+        Ok(state)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MediaSubscriptionOpened {
+    pub resource_id: u64,
+    pub state: MediaState,
+}
+
+impl MediaSubscriptionOpened {
+    pub fn encode(&self) -> Result<Vec<u8>, SchemaError> {
+        if self.resource_id == 0 {
+            return Err(SchemaError::Malformed);
+        }
+        let mut encoder = Encoder::new(MEDIA_OPENED_MAGIC);
+        encoder.u64(self.resource_id);
+        encode_media_state(&mut encoder, &self.state)?;
+        encoder.finish()
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, SchemaError> {
+        let mut decoder = Decoder::new(bytes, MEDIA_OPENED_MAGIC)?;
+        let resource_id = decoder.u64()?;
+        if resource_id == 0 {
+            return Err(SchemaError::Malformed);
+        }
+        let state = decode_media_state(&mut decoder)?;
+        decoder.finish()?;
+        Ok(Self { resource_id, state })
+    }
+}
+
+const MEDIA_CAN_PLAY: u8 = 1;
+const MEDIA_CAN_PAUSE: u8 = 1 << 1;
+const MEDIA_CAN_GO_NEXT: u8 = 1 << 2;
+const MEDIA_CAN_GO_PREVIOUS: u8 = 1 << 3;
+const MEDIA_CAN_SEEK: u8 = 1 << 4;
+
+fn encode_media_state(encoder: &mut Encoder, state: &MediaState) -> Result<(), SchemaError> {
+    if state.generation == 0 {
+        return Err(SchemaError::Malformed);
+    }
+    encoder.u64(state.generation);
+    let Some(session) = &state.session else {
+        encoder.byte(0);
+        return Ok(());
+    };
+    encoder.byte(1);
+    if session.player.is_empty() {
+        return Err(SchemaError::Malformed);
+    }
+    for text in [
+        &session.player,
+        &session.identity,
+        &session.track_id,
+        &session.title,
+        &session.artist,
+        &session.album,
+    ] {
+        if text.len() > MAX_MEDIA_TEXT_BYTES {
+            return Err(SchemaError::LimitExceeded);
+        }
+        encoder.string(text)?;
+    }
+    encoder.byte(match session.status {
+        MediaPlaybackStatus::Playing => 0,
+        MediaPlaybackStatus::Paused => 1,
+        MediaPlaybackStatus::Stopped => 2,
+    });
+    for value in [session.length_micros, session.position_micros] {
+        encoder.byte(u8::from(value.is_some()));
+        if let Some(value) = value {
+            encoder.u64(value);
+        }
+    }
+    let mut flags = 0;
+    for (enabled, flag) in [
+        (session.can_play, MEDIA_CAN_PLAY),
+        (session.can_pause, MEDIA_CAN_PAUSE),
+        (session.can_go_next, MEDIA_CAN_GO_NEXT),
+        (session.can_go_previous, MEDIA_CAN_GO_PREVIOUS),
+        (session.can_seek, MEDIA_CAN_SEEK),
+    ] {
+        if enabled {
+            flags |= flag;
+        }
+    }
+    encoder.byte(flags);
+    Ok(())
+}
+
+fn decode_media_state(decoder: &mut Decoder<'_>) -> Result<MediaState, SchemaError> {
+    let generation = decoder.u64()?;
+    if generation == 0 {
+        return Err(SchemaError::Malformed);
+    }
+    let session = match decoder.byte()? {
+        0 => None,
+        1 => {
+            let mut text = || {
+                let value = decoder.string()?;
+                if value.len() > MAX_MEDIA_TEXT_BYTES {
+                    return Err(SchemaError::LimitExceeded);
+                }
+                Ok(value)
+            };
+            let player = text()?;
+            let identity = text()?;
+            let track_id = text()?;
+            let title = text()?;
+            let artist = text()?;
+            let album = text()?;
+            if player.is_empty() {
+                return Err(SchemaError::Malformed);
+            }
+            let status = match decoder.byte()? {
+                0 => MediaPlaybackStatus::Playing,
+                1 => MediaPlaybackStatus::Paused,
+                2 => MediaPlaybackStatus::Stopped,
+                _ => return Err(SchemaError::Malformed),
+            };
+            let mut optional = || match decoder.byte()? {
+                0 => Ok(None),
+                1 => decoder.u64().map(Some),
+                _ => Err(SchemaError::Malformed),
+            };
+            let length_micros = optional()?;
+            let position_micros = optional()?;
+            let flags = decoder.byte()?;
+            if flags
+                & !(MEDIA_CAN_PLAY
+                    | MEDIA_CAN_PAUSE
+                    | MEDIA_CAN_GO_NEXT
+                    | MEDIA_CAN_GO_PREVIOUS
+                    | MEDIA_CAN_SEEK)
+                != 0
+            {
+                return Err(SchemaError::Malformed);
+            }
+            Some(MediaSession {
+                player,
+                identity,
+                status,
+                track_id,
+                title,
+                artist,
+                album,
+                length_micros,
+                position_micros,
+                can_play: flags & MEDIA_CAN_PLAY != 0,
+                can_pause: flags & MEDIA_CAN_PAUSE != 0,
+                can_go_next: flags & MEDIA_CAN_GO_NEXT != 0,
+                can_go_previous: flags & MEDIA_CAN_GO_PREVIOUS != 0,
+                can_seek: flags & MEDIA_CAN_SEEK != 0,
+            })
+        }
+        _ => return Err(SchemaError::Malformed),
+    };
+    Ok(MediaState {
+        generation,
+        session,
+    })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MediaAction {
+    PlayPause,
+    Play,
+    Pause,
+    Next,
+    Previous,
+    SetPosition {
+        track_id: String,
+        position_micros: u64,
+    },
+}
+
+/// One `media.control.v1` command for the player a session named.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MediaCommand {
+    pub player: String,
+    pub action: MediaAction,
+}
+
+impl MediaCommand {
+    pub fn encode(&self) -> Result<Vec<u8>, SchemaError> {
+        if self.player.is_empty() {
+            return Err(SchemaError::Malformed);
+        }
+        if self.player.len() > MAX_MEDIA_TEXT_BYTES {
+            return Err(SchemaError::LimitExceeded);
+        }
+        let mut encoder = Encoder::new(MEDIA_COMMAND_MAGIC);
+        encoder.string(&self.player)?;
+        match &self.action {
+            MediaAction::PlayPause => encoder.byte(0),
+            MediaAction::Play => encoder.byte(1),
+            MediaAction::Pause => encoder.byte(2),
+            MediaAction::Next => encoder.byte(3),
+            MediaAction::Previous => encoder.byte(4),
+            MediaAction::SetPosition {
+                track_id,
+                position_micros,
+            } => {
+                if track_id.len() > MAX_MEDIA_TEXT_BYTES {
+                    return Err(SchemaError::LimitExceeded);
+                }
+                encoder.byte(5);
+                encoder.string(track_id)?;
+                encoder.u64(*position_micros);
+            }
+        }
+        encoder.finish()
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, SchemaError> {
+        let mut decoder = Decoder::new(bytes, MEDIA_COMMAND_MAGIC)?;
+        let player = decoder.string()?;
+        if player.is_empty() {
+            return Err(SchemaError::Malformed);
+        }
+        if player.len() > MAX_MEDIA_TEXT_BYTES {
+            return Err(SchemaError::LimitExceeded);
+        }
+        let action = match decoder.byte()? {
+            0 => MediaAction::PlayPause,
+            1 => MediaAction::Play,
+            2 => MediaAction::Pause,
+            3 => MediaAction::Next,
+            4 => MediaAction::Previous,
+            5 => {
+                let track_id = decoder.string()?;
+                if track_id.len() > MAX_MEDIA_TEXT_BYTES {
+                    return Err(SchemaError::LimitExceeded);
+                }
+                MediaAction::SetPosition {
+                    track_id,
+                    position_micros: decoder.u64()?,
+                }
+            }
+            _ => return Err(SchemaError::Malformed),
+        };
+        decoder.finish()?;
+        Ok(Self { player, action })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2379,6 +2701,10 @@ mod tests {
         let _ = DbusSubscription::decode(bytes);
         let _ = DbusSubscriptionOpened::decode(bytes);
         let _ = DbusPropertiesChanged::decode(bytes);
+        let _ = MediaReadRequest::decode(bytes);
+        let _ = MediaState::decode(bytes);
+        let _ = MediaSubscriptionOpened::decode(bytes);
+        let _ = MediaCommand::decode(bytes);
     }
 
     #[test]
@@ -2426,6 +2752,10 @@ mod tests {
             SUBSCRIPTION_MAGIC,
             OPENED_MAGIC,
             SIGNAL_MAGIC,
+            MEDIA_READ_MAGIC,
+            MEDIA_STATE_MAGIC,
+            MEDIA_OPENED_MAGIC,
+            MEDIA_COMMAND_MAGIC,
         ];
         let mut random = 0x9e37_79b9_7f4a_7c15_u64;
         for index in 0..4096 {
@@ -2449,6 +2779,113 @@ mod tests {
             }
             exercise_all_decoders(&bytes);
         }
+    }
+
+    fn media_session() -> MediaSession {
+        MediaSession {
+            player: "org.mpris.MediaPlayer2.vlc".into(),
+            identity: "VLC media player".into(),
+            status: MediaPlaybackStatus::Paused,
+            track_id: "/org/videolan/vlc/playlist/3".into(),
+            title: "Title".into(),
+            artist: "One, Two".into(),
+            album: String::new(),
+            length_micros: Some(200_000_000),
+            position_micros: None,
+            can_play: true,
+            can_pause: true,
+            can_go_next: false,
+            can_go_previous: true,
+            can_seek: true,
+        }
+    }
+
+    #[test]
+    fn media_payloads_round_trip_and_reject_ambiguity() {
+        assert_eq!(
+            MediaReadRequest::decode(&MediaReadRequest.encode().unwrap()),
+            Ok(MediaReadRequest)
+        );
+        for session in [None, Some(media_session())] {
+            let state = MediaState {
+                generation: 7,
+                session,
+            };
+            assert_eq!(
+                MediaState::decode(&state.encode().unwrap()),
+                Ok(state.clone())
+            );
+            let opened = MediaSubscriptionOpened {
+                resource_id: 3,
+                state,
+            };
+            assert_eq!(
+                MediaSubscriptionOpened::decode(&opened.encode().unwrap()),
+                Ok(opened)
+            );
+        }
+        for action in [
+            MediaAction::PlayPause,
+            MediaAction::Play,
+            MediaAction::Pause,
+            MediaAction::Next,
+            MediaAction::Previous,
+            MediaAction::SetPosition {
+                track_id: "/org/videolan/vlc/playlist/3".into(),
+                position_micros: 42_000_000,
+            },
+        ] {
+            let command = MediaCommand {
+                player: "org.mpris.MediaPlayer2.vlc".into(),
+                action,
+            };
+            assert_eq!(
+                MediaCommand::decode(&command.encode().unwrap()),
+                Ok(command)
+            );
+        }
+
+        let mut trailing = MediaReadRequest.encode().unwrap();
+        trailing.push(0);
+        assert_eq!(
+            MediaReadRequest::decode(&trailing),
+            Err(SchemaError::Malformed)
+        );
+        assert_eq!(
+            MediaState {
+                generation: 0,
+                session: None
+            }
+            .encode(),
+            Err(SchemaError::Malformed)
+        );
+        let long = MediaState {
+            generation: 1,
+            session: Some(MediaSession {
+                title: "x".repeat(MAX_MEDIA_TEXT_BYTES + 1),
+                ..media_session()
+            }),
+        };
+        assert_eq!(long.encode(), Err(SchemaError::LimitExceeded));
+        let mut unknown_flag = MediaState {
+            generation: 1,
+            session: Some(media_session()),
+        }
+        .encode()
+        .unwrap();
+        *unknown_flag.last_mut().unwrap() |= 0x80;
+        assert_eq!(
+            MediaState::decode(&unknown_flag),
+            Err(SchemaError::Malformed)
+        );
+        assert_eq!(
+            MediaCommand {
+                player: String::new(),
+                action: MediaAction::Next
+            }
+            .encode(),
+            Err(SchemaError::Malformed)
+        );
     }
 
     #[test]

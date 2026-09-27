@@ -23,6 +23,12 @@ ProtectHome=true
 PrivateTmp=true
 PrivateIPC=true
 ProtectKernelTunables=true
+# ProtectKernelTunables= makes all of /sys read-only, but the idle policy
+# writes exactly one backlight attribute (backlight.rs KNOWN_NAMES). systemd
+# resolves the class symlink to the device node; "-" skips absent names.
+ReadWritePaths=-/sys/class/backlight/appletb_backlight/brightness
+ReadWritePaths=-/sys/class/backlight/228200000.display-pipe.0/brightness
+ReadWritePaths=-/sys/class/backlight/228600000.dsi.0/brightness
 ProtectKernelModules=true
 ProtectKernelLogs=true
 ProtectControlGroups=strict

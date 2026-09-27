@@ -7,6 +7,7 @@ members = [
     "crates/touchbar-appearance-provider-sdk",
     "crates/touchbar-layout",
     "crates/touchbar-model",
+    "crates/touchbar-mpris",
     "crates/touchbar-package",
     "crates/touchbar-plugin-host",
     "crates/touchbar-plugin-store",

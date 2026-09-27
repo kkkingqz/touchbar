@@ -2339,6 +2339,8 @@ fn capability_title(capability: &CapabilityId) -> &'static str {
         CapabilityId::UriOpenV1 => "Open approved links",
         CapabilityId::LocalConnectV1 => "Connect to a local service",
         CapabilityId::AppearanceProvideV1 => "Provide the Touch Bar appearance",
+        CapabilityId::MediaReadV1 => "See what media is playing",
+        CapabilityId::MediaControlV1 => "Control media playback",
         CapabilityId::Unknown(_) => "Request unsupported host access",
     }
 }

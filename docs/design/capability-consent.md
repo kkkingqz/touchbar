@@ -255,6 +255,8 @@ describes the real normalized scope and risks.
 | `uri.open.v1` | Schemes and optional origin set | Requires activation; forbids dangerous or unsupported schemes. |
 | `local.connect.v1` | Exact user-approved Unix endpoints and protocol label | No arbitrary socket namespace or descriptor passing; classified as broad unless a protocol adapter narrows operations. |
 | `appearance.provide.v1` | Exact package-local provider IDs, installer-bound roots, file size, and update rate | Available only to the separate provider worker; authorizes bounded reads and typed semantic publication, while the compositor owns selection, motion policy, derived roles, and atomic generations. |
+| `media.read.v1` | Update rate | One now-playing MPRIS session chosen by the host (the player that last started playing, kept while paused); typed title, artist, album, position, and capabilities, never raw D-Bus. Titles can be private, so it is sensitive. |
+| `media.control.v1` | Transport actions: play-pause, play, pause, next, previous, seek | Every command needs a fresh physical activation of the component's own control; a slider's release counts. Commands address only MPRIS players, and a seek names the track it was meant for. |
 
 Clipboard, secret, context, URI, notification, and input operations should use
 desktop portals when a suitable portal actually supplies the needed authority

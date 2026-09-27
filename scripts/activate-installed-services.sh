@@ -19,4 +19,5 @@ if ! systemctl --user enable --now touchbar-session.service; then
 fi
 
 systemctl --user is-active --quiet touchbar-session.service
-echo "TouchBar is active. tiny-dfr remains installed but masked for deterministic ownership."
+echo "TouchBar is active. touchbar-rollback hands the Touch Bar back to tiny-dfr where it is"
+echo "installed (masked meanwhile), otherwise to the Intel T2's native function row."

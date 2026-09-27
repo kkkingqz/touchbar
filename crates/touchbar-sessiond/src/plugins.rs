@@ -1085,6 +1085,8 @@ fn start(supervisor: &Path, host: &Path, paths: &StorePaths, display: &str, proc
                 .arg(&paths.grants)
                 .arg("--session-grants")
                 .arg(&paths.session_grants)
+                .arg("--media-session")
+                .arg(&paths.media_session)
                 .arg("--audit")
                 .arg(&paths.audit)
                 .arg("--")

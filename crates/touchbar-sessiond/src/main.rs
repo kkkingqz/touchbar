@@ -54,6 +54,7 @@ mod frame_output;
 mod gpu;
 mod input;
 mod live_profiles;
+mod media_context;
 mod plugins;
 mod power;
 mod presentation;
@@ -64,11 +65,14 @@ mod system_scene;
 mod wake;
 
 use appearance::AppearanceSource;
-use context::{ContextEvent, ContextReplay, HyprlandContextSource};
+use context::{
+    ContextChange, ContextEvent, ContextReplay, GnomeContextSource, HyprlandContextSource,
+};
 use frame_output::FramePublisher;
 use gpu::{CompletionFence, GpuCompositor, LayerGeometry};
 use input::{Contact as GlobalContact, Phase as ContactPhase, Router as InputRouter};
 use live_profiles::LiveProfiles;
+use media_context::MediaContextSource;
 use power::{PowerSource, PowerState};
 use presentation::{
     Anchor, full_bar, in_place_bar, in_place_content_bar, resolve_popover, slot_bar,
@@ -2324,6 +2328,30 @@ impl State {
         Ok(())
     }
 
+    fn apply_context_change(&mut self, change: ContextChange) -> Result<()> {
+        match change {
+            ContextChange::Set(event) => self.handle_context_event(event),
+            ContextChange::Cleared(key) => self.clear_context_fact(&key),
+        }
+    }
+
+    fn clear_context_fact(&mut self, key: &str) -> Result<()> {
+        self.context_changes += 1;
+        println!("context-event key={key} cleared=true");
+        let Some(profiles) = self.live_profiles.as_mut() else {
+            return Ok(());
+        };
+        if !profiles.has_fact(key) {
+            return Ok(());
+        }
+        if let Some(snapshot) = profiles.remove_fact(key)? {
+            self.apply_profile_snapshot(&snapshot)?;
+        } else if profiles.ready() {
+            println!("profile-layout=deferred captured-contact-active");
+        }
+        Ok(())
+    }
+
     fn apply_profile_snapshot(&mut self, snapshot: &ProfileCompositionSnapshot) -> Result<()> {
         let items = bar_item_ids(&snapshot.composition.bar)
             .into_iter()
@@ -3701,27 +3729,8 @@ impl Dispatch<touchbar_surface_v1::TouchbarSurfaceV1, TouchbarSurfaceData> for S
     }
 }
 
-fn create_dmabuf_global_data() -> Result<DmabufGlobalData> {
-    let render_node = match std::env::var_os("TOUCHBAR_RENDER_NODE") {
-        Some(path) => PathBuf::from(path),
-        None => {
-            let mut nodes = std::fs::read_dir("/dev/dri")
-                .context("read /dev/dri for DMA-BUF feedback")?
-                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-                .filter(|path| {
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .is_some_and(|name| name.starts_with("renderD"))
-                })
-                .collect::<Vec<_>>();
-            nodes.sort();
-            nodes
-                .into_iter()
-                .next()
-                .context("no DRM render node is available")?
-        }
-    };
-    let device = std::fs::metadata(&render_node)
+fn create_dmabuf_global_data(render_node: &Path) -> Result<DmabufGlobalData> {
+    let device = std::fs::metadata(render_node)
         .with_context(|| format!("stat DRM render node {}", render_node.display()))?
         .rdev()
         .to_ne_bytes()
@@ -3768,6 +3777,8 @@ struct Args {
     profiles: Option<PathBuf>,
     demo_focus: bool,
     hyprland_context: bool,
+    gnome_context: bool,
+    media_context: bool,
     plugins: bool,
     control_socket: Option<PathBuf>,
     plugin_host: PathBuf,
@@ -3890,6 +3901,8 @@ fn parse_args() -> Args {
     let mut profiles = None;
     let mut demo_focus = false;
     let mut hyprland_context = false;
+    let mut gnome_context = false;
+    let mut media_context = false;
     let mut plugins = true;
     let mut control_socket = None;
     let mut plugin_host = sibling_binary("touchbar-plugin-host");
@@ -3945,6 +3958,8 @@ fn parse_args() -> Args {
             "--hyprland-context" => {
                 hyprland_context = true;
             }
+            "--gnome-context" => gnome_context = true,
+            "--media-context" => media_context = true,
             "--no-plugins" => plugins = false,
             "--system-bar" => system_bar = true,
             "--control-socket" => {
@@ -3970,7 +3985,7 @@ fn parse_args() -> Args {
             }
             "--help" | "-h" => {
                 println!(
-                    "usage: touchbar-sessiond [--socket NAME] [--frame-output PATH] [--preview | --preview-scale 1|2|4] [--hardware-socket PATH | --hardware-listen PATH | --swapchain-probe PATH] [--system-bar] [--profiles FILE | --profile-demo] [--demo-touch | --demo-tap | --demo-nested] [--demo-focus | --hyprland-context] [--no-plugins] [--control-socket PATH] [--plugin-host PATH --plugin-supervisor PATH] [--trusted-plugins] [--exit-after-client | --exit-after-clients N]"
+                    "usage: touchbar-sessiond [--socket NAME] [--frame-output PATH] [--preview | --preview-scale 1|2|4] [--hardware-socket PATH | --hardware-listen PATH | --swapchain-probe PATH] [--system-bar] [--profiles FILE | --profile-demo] [--demo-touch | --demo-tap | --demo-nested] [--demo-focus | --hyprland-context] [--gnome-context] [--media-context] [--no-plugins] [--control-socket PATH] [--plugin-host PATH --plugin-supervisor PATH] [--trusted-plugins] [--exit-after-client | --exit-after-clients N]"
                 );
                 std::process::exit(0);
             }
@@ -3990,6 +4005,8 @@ fn parse_args() -> Args {
         profiles,
         demo_focus,
         hyprland_context,
+        gnome_context,
+        media_context,
         plugins,
         control_socket,
         plugin_host,
@@ -4277,10 +4294,18 @@ fn main() -> Result<()> {
         // Session decisions deliberately expire with this compositor session.
         // Reinitialize the private runtime store before any supervisor starts.
         initialize_session_permissions(&plugin_paths.session_grants)?;
+        // A choice recorded by an earlier session daemon is no one's now.
+        touchbar_mpris::session_file::write(&plugin_paths.media_session, None)
+            .context("clear the media session record")?;
     }
-    let mut gpu = GpuCompositor::new(DEFAULT_REGION_WIDTH, TOUCHBAR_HEIGHT)
+    let render_node = gpu::select_render_node()?;
+    let mut gpu = GpuCompositor::new(DEFAULT_REGION_WIDTH, TOUCHBAR_HEIGHT, &render_node)
         .context("initialize GPU compositor")?;
-    println!("compositor-renderer={}", gpu.renderer_name());
+    println!(
+        "compositor-renderer={} render-node={}",
+        gpu.renderer_name(),
+        render_node.display()
+    );
     if let Some(path) = &args.swapchain_probe {
         return run_swapchain_probe(&mut gpu, path);
     }
@@ -4315,7 +4340,7 @@ fn main() -> Result<()> {
         .preview_scale
         .map(|scale| PreviewOutput::connect(gpu.canvas_width(), TOUCHBAR_HEIGHT, scale))
         .transpose()?;
-    let dmabuf_global = create_dmabuf_global_data()?;
+    let dmabuf_global = create_dmabuf_global_data(&render_node)?;
     let mut display = Display::<State>::new().context("create Wayland display")?;
     let mut handle = display.handle();
     handle.create_global::<State, wl_compositor::WlCompositor, _>(6, ());
@@ -4328,6 +4353,8 @@ fn main() -> Result<()> {
 
     let listener = ListeningSocket::bind(&args.socket)
         .with_context(|| format!("bind Wayland socket {}", args.socket))?;
+    // Supervisors exist only with plugins, and follow the record then.
+    let media_record = args.plugins.then(|| plugin_paths.media_session.clone());
     let control_path = args
         .control_socket
         .clone()
@@ -4371,7 +4398,14 @@ fn main() -> Result<()> {
     let mut demo_focus = args.demo_focus.then(ContextReplay::demo);
     let mut next_hyprland_reconnect = Instant::now();
     let mut hyprland_reconnect_failures = 0_u64;
-    let (mut hyprland_context, initial_context) = if args.hyprland_context {
+    // The unit's environment is fixed when it starts, so outside a Hyprland
+    // session the event socket can never appear; do not retry for it.
+    let hyprland_enabled =
+        args.hyprland_context && std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some();
+    if args.hyprland_context && !hyprland_enabled {
+        println!("context-source=hyprland disabled=true reason=not-a-hyprland-session");
+    }
+    let (mut hyprland_context, initial_context) = if hyprland_enabled {
         match HyprlandContextSource::connect() {
             Ok((source, initial)) => {
                 println!("context-source=hyprland ready=true");
@@ -4389,6 +4423,31 @@ fn main() -> Result<()> {
     };
     for event in initial_context {
         state.handle_context_event(event)?;
+    }
+    let mut gnome_context = None;
+    if args.gnome_context {
+        match GnomeContextSource::start() {
+            Ok((source, initial)) => {
+                if let Some(change) = initial {
+                    state.apply_context_change(change)?;
+                }
+                gnome_context = Some(source);
+            }
+            Err(error) => eprintln!("context-source=gnome disabled=true error={error:#}"),
+        }
+    }
+    let mut media_context = None;
+    if args.media_context {
+        match MediaContextSource::start(media_record) {
+            Ok((source, initial)) => {
+                println!("context-source=media ready=true");
+                for change in initial {
+                    state.apply_context_change(change)?;
+                }
+                media_context = Some(source);
+            }
+            Err(error) => eprintln!("context-source=media disabled=true error={error:#}"),
+        }
     }
 
     println!(
@@ -4587,7 +4646,7 @@ fn main() -> Result<()> {
                 }
             }
         }
-        if args.hyprland_context
+        if hyprland_enabled
             && hyprland_context.is_none()
             && Instant::now() >= next_hyprland_reconnect
         {
@@ -4611,6 +4670,40 @@ fn main() -> Result<()> {
                         );
                     }
                     next_hyprland_reconnect = Instant::now() + Duration::from_secs(5);
+                }
+            }
+        }
+
+        if let Some(source) = &mut gnome_context {
+            match source.poll() {
+                Ok(change) => {
+                    if let Some(change) = change {
+                        state.apply_context_change(change)?;
+                    }
+                }
+                Err(error) => {
+                    eprintln!("context-source=gnome stopped error={error:#}");
+                    if let Some(change) = source.withdraw() {
+                        state.apply_context_change(change)?;
+                    }
+                    gnome_context = None;
+                }
+            }
+        }
+
+        if let Some(source) = &mut media_context {
+            match source.poll() {
+                Ok(changes) => {
+                    for change in changes {
+                        state.apply_context_change(change)?;
+                    }
+                }
+                Err(error) => {
+                    eprintln!("context-source=media stopped error={error:#}");
+                    for change in source.withdraw() {
+                        state.apply_context_change(change)?;
+                    }
+                    media_context = None;
                 }
             }
         }
@@ -4648,7 +4741,7 @@ fn main() -> Result<()> {
             (!state.pending_releases.is_empty()).then_some(GPU_RELEASE_POLL_INTERVAL);
         let demo_delay =
             (demo_touch.is_some() || demo_focus.is_some()).then_some(DEMO_POLL_INTERVAL);
-        let hyprland_delay = (args.hyprland_context && hyprland_context.is_none())
+        let hyprland_delay = (hyprland_enabled && hyprland_context.is_none())
             .then(|| next_hyprland_reconnect.saturating_duration_since(Instant::now()));
         let profile_reload_delay = profile_reload_deadline
             .map(|deadline| deadline.saturating_duration_since(Instant::now()));
@@ -4660,6 +4753,9 @@ fn main() -> Result<()> {
             Some(state.power_source.next_poll_delay()),
             state.next_hardware_reconnect_delay(),
             state.next_transient_context_delay(),
+            media_context
+                .as_ref()
+                .and_then(MediaContextSource::next_deadline),
             hyprland_delay,
             profile_reload_delay,
             plugin_manager
@@ -4680,6 +4776,12 @@ fn main() -> Result<()> {
             wait_fds.push(output.notification_fd());
         }
         if let Some(source) = &hyprland_context {
+            wait_fds.push(source.notification_fd());
+        }
+        if let Some(source) = &gnome_context {
+            wait_fds.push(source.notification_fd());
+        }
+        if let Some(source) = &media_context {
             wait_fds.push(source.notification_fd());
         }
         if let Some(watcher) = &profile_watcher {

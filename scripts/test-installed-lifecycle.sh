@@ -64,11 +64,17 @@ if [[ ! -e /etc/touchbar/enabled ]]; then
     echo "activate them with: touchbar-activate" >&2
     exit 1
 fi
-if [[ $(systemctl is-enabled tiny-dfr.service 2>/dev/null || true) != masked* ]]; then
+if [[ -f /usr/lib/systemd/system/tiny-dfr.service || -f /etc/systemd/system/tiny-dfr.service ]] \
+    && [[ $(systemctl is-enabled tiny-dfr.service 2>/dev/null || true) != masked* ]]; then
     echo "tiny-dfr.service must be masked while touchbard owns the hardware" >&2
     exit 1
 fi
-if [[ $(systemctl is-enabled touchbar.service 2>/dev/null || true) != enabled ]]; then
+t2=false
+if [[ $(systemctl is-enabled touchbar-t2-display.service 2>/dev/null || true) == enabled ]]; then
+    # Intel T2: udev starts touchbar.service once the display configuration's
+    # card appears, so it is deliberately not enabled for multi-user.target.
+    t2=true
+elif [[ $(systemctl is-enabled touchbar.service 2>/dev/null || true) != enabled ]]; then
     echo "touchbar.service is not enabled" >&2
     exit 1
 fi
@@ -104,6 +110,11 @@ touchbarctl session status
 
 echo "Recent hardware lifecycle log:"
 journalctl -u touchbar.service --since "$started_at" --no-pager -n 80
+if [[ $t2 == true ]]; then
+    echo "Recent T2 configuration switches:"
+    journalctl -u touchbar-t2-sleep.service -u touchbar-t2-display.service \
+        --since "$started_at" --no-pager -n 40
+fi
 echo "Recent user-session lifecycle log:"
 journalctl --user -u touchbar-session.service --since "$started_at" --no-pager -n 80
 echo "installed-lifecycle=ok suspend=passed"

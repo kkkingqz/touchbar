@@ -235,7 +235,16 @@ release. A failed upload or finalization removes the incomplete draft. The
 generated workflow invokes this command after package attestation and never
 requires the GitHub CLI.
 
-Packages declare permissions in `touchbar-plugin.toml`. Required permissions block startup until granted; optional permissions appear unavailable to the component and must degrade gracefully. Never put secrets in the manifest or package. Filesystem paths, D-Bus calls, HTTP origins, command templates, local sockets, clipboard access, notifications, URI opening, and secrets are mediated by the native supervisor and validated against the approved scope.
+Packages declare permissions in `touchbar-plugin.toml`. Required permissions block startup until granted; optional permissions appear unavailable to the component and must degrade gracefully. Never put secrets in the manifest or package. Filesystem paths, D-Bus calls, HTTP origins, command templates, local sockets, clipboard access, notifications, URI opening, media sessions, and secrets are mediated by the native supervisor and validated against the approved scope.
+
+For playback, prefer `media.read.v1` and `media.control.v1` over raw D-Bus.
+`media_subscribe()` delivers the host-chosen now-playing MPRIS session as typed
+`MediaState` values: on every change, and once per second of the track while it
+plays, so no timer is needed to show elapsed time. `media_command()` accepts
+play-pause, play, pause, next, previous, and a seek that repeats the session's
+`track_id`; each needs a fresh touch, and a slider's release delivers one as
+`Activated` after its final `ValueChanged`. The first-party Media pack in
+`plugins/media` is the reference.
 
 Authors never write grant files or initiate arbitrary runtime prompts. Users
 inspect normalized requests with `touchbarctl plugin permissions SOURCE` and
@@ -244,7 +253,10 @@ choose `allow`, `deny`, or `reset` with an explicit `--session` or
 optional capability as dynamically revocable: finish rendering immediately,
 submit broker work only from input or host-event callbacks, and respond to the
 capability-change event by closing affected UI state or showing a safe disabled
-state. Use `--format json` in agent-driven setup and tests.
+state. The host reports every capability's initial state as a
+capability-change event before the first render, so a glanceable item can open
+its subscriptions without waiting for a touch. Use `--format json` in
+agent-driven setup and tests.
 
 Run `touchbarctl plugin context --format json` when an agent needs a compact machine-readable summary.
 Use `touchbarctl plugin search` for the bundled reviewed catalog. Catalog

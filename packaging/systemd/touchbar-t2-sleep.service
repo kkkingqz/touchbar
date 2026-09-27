@@ -1,0 +1,24 @@
+[Unit]
+Description=Keep the T2 Touch Bar in its native configuration across system sleep
+Documentation=https://github.com/cameroncooper/touchbar
+# appletbdrm has no USB PM callbacks, so leaving the display configuration
+# active makes the kernel unbind and re-probe it inside every suspend/resume.
+# The native configuration is the one that sleeps reliably.
+ConditionPathExists=/etc/touchbar/enabled
+Before=sleep.target
+StopWhenUnneeded=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# "-": systemd runs ExecStop= only for a unit that started successfully, and
+# the resume half must run even if the switch to native mode failed.
+ExecStart=-/usr/lib/touchbar/touchbar-t2-mode native
+# restart rather than start: a display switch that udev started after thaw,
+# while this unit still counted as active, stands aside and may still be
+# running; a start request would merge into it and switch nothing.
+ExecStop=/usr/bin/systemctl --no-block restart touchbar-t2-display.service
+TimeoutStartSec=120
+
+[Install]
+WantedBy=sleep.target

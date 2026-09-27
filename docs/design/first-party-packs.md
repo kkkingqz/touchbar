@@ -7,7 +7,7 @@ the product research is complete.
 | Pack | Contributions | Platform behavior proved |
 |---|---|---|
 | System Controls | volume, brightness, microphone, battery, power profile | continuous sliders, glanceable progress, toggles, responsive collapse, command templates |
-| Media | now playing, transport, timeline | MPRIS D-Bus calls, compact metadata, transport, scrubbing |
+| Media | now playing, transport, timeline | typed `media.read.v1`/`media.control.v1` MPRIS session, live metadata and position, transport, scrubbing |
 | Hyprland Navigator | workspaces, window actions, move window | context disclosure, workspace scrubbers, typed `hyprctl` templates |
 | Capture Studio | screenshots, recording, capture tools | multi-action palettes, destructive recording state, long-running commands |
 | Command Deck | desktop menu, launchers, session, custom actions | fixed safe actions, hold confirmation, user-owned local action service |

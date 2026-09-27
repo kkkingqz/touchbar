@@ -2,8 +2,8 @@ manifest_version = 1
 
 [plugin]
 name = "Media"
-version = "1.0.0"
-description = "MPRIS playback glance, transport controls, and timeline scrubbing"
+version = "1.1.0"
+description = "Now playing from MPRIS players: title, transport controls and a scrubbable timeline"
 license = "MIT OR Apache-2.0"
 source = "github:cameroncooper/touchbar-media"
 api = "^1.0"
@@ -16,22 +16,26 @@ world = "touchbar:plugin/plugin@1.0.0"
 [[items]]
 id = "now-playing"
 label = "Now Playing"
+default_width = 320
 expanded_bar = "media-expanded"
+press_and_hold_bar = "media-expanded"
 [[items]]
 id = "transport"
 label = "Media Transport"
+default_width = 280
 [[items]]
 id = "timeline"
 label = "Media Timeline"
+default_width = 1000
 [[items]]
 id = "touchbar-logo"
 label = "TouchBar Logo"
 
 [[bar]]
 id = "media-expanded"
-minimum_width = 468
-preferred_width = 760
-maximum_width = 1004
+minimum_width = 600
+preferred_width = 1004
+maximum_width = 1600
 dismiss_on_selection = false
 principal_item = "timeline"
 
@@ -39,27 +43,22 @@ principal_item = "timeline"
 kind = "item"
 item = "now-playing"
 minimum_width = 160
-preferred_width = 320
-maximum_width = 520
+preferred_width = 240
+maximum_width = 320
 
 [[bar.element]]
 kind = "item"
 item = "transport"
-minimum_width = 120
-preferred_width = 160
-maximum_width = 240
-
-[[bar.element]]
-kind = "flexible-space"
-minimum = 8
-weight = 1
+minimum_width = 180
+preferred_width = 240
+maximum_width = 300
 
 [[bar.element]]
 kind = "item"
 item = "timeline"
-minimum_width = 180
-preferred_width = 264
-maximum_width = 480
+minimum_width = 240
+preferred_width = 500
+maximum_width = 960
 
 [[asset]]
 id = "touchbar-wordmark"
@@ -68,38 +67,51 @@ kind = "symbolic-svg"
 width = 171
 height = 40
 
+[[asset]]
+id = "play"
+path = "assets/play.svg"
+kind = "symbolic-svg"
+width = 24
+height = 24
+
+[[asset]]
+id = "pause"
+path = "assets/pause.svg"
+kind = "symbolic-svg"
+width = 24
+height = 24
+
+[[asset]]
+id = "backward"
+path = "assets/backward.svg"
+kind = "symbolic-svg"
+width = 24
+height = 24
+
+[[asset]]
+id = "forward"
+path = "assets/forward.svg"
+kind = "symbolic-svg"
+width = 24
+height = 24
+
+[[asset]]
+id = "note"
+path = "assets/note.svg"
+kind = "symbolic-svg"
+width = 24
+height = 24
+
 [[permission]]
-capability = "dbus.call.v1"
+capability = "media.read.v1"
 required = false
-reason = "Control the selected MPRIS player through playerctld"
+reason = "Show what the current player is playing and how far it is"
 [permission.scope]
+maximum_updates_per_second = 4
 
-[[permission.scope.rules]]
-bus = "session"
-destination = "org.mpris.MediaPlayer2.playerctld"
-path = "/org/mpris/MediaPlayer2"
-interface = "org.mpris.MediaPlayer2.Player"
-member = "PlayPause"
-signature = ""
-allow_service_activation = false
-requires_user_activation = true
-
-[[permission.scope.rules]]
-bus = "session"
-destination = "org.mpris.MediaPlayer2.playerctld"
-path = "/org/mpris/MediaPlayer2"
-interface = "org.mpris.MediaPlayer2.Player"
-member = "Next"
-signature = ""
-allow_service_activation = false
-requires_user_activation = true
-
-[[permission.scope.rules]]
-bus = "session"
-destination = "org.mpris.MediaPlayer2.playerctld"
-path = "/org/mpris/MediaPlayer2"
-interface = "org.mpris.MediaPlayer2.Player"
-member = "Previous"
-signature = ""
-allow_service_activation = false
-requires_user_activation = true
+[[permission]]
+capability = "media.control.v1"
+required = false
+reason = "Play, pause, skip and scrub the current player when you touch its controls"
+[permission.scope]
+actions = ["play-pause", "next", "previous", "seek"]

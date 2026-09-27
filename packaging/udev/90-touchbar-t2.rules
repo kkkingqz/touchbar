@@ -1,0 +1,13 @@
+# Intel T2 Touch Bar (USB 05ac:8302). Configuration 1 is the native keyboard
+# mode: the T2 draws the function row and hid-appletb-kbd drives it.
+# Configuration 2 is the display mode (appletbdrm + hid-multitouch) that
+# touchbard owns. Every enumeration starts native, so a re-enumeration never
+# leaves the strip dark; touchbar-t2-display.service selects the display
+# configuration once TouchBar is activated.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="05ac", ATTR{idProduct}=="8302", ATTR{bConfigurationValue}!="1", ATTR{bConfigurationValue}="0", ATTR{bConfigurationValue}="1"
+
+# Re-enter the display configuration whenever the device enumerates again
+# (boot, t2bce's no-state resume path) while TouchBar is active. The unit
+# itself stands aside while a system sleep is in progress.
+ACTION!="remove", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="05ac", ATTR{idProduct}=="8302", TAG+="systemd"
+ACTION!="remove", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="05ac", ATTR{idProduct}=="8302", TEST=="/etc/touchbar/enabled", ENV{SYSTEMD_WANTS}+="touchbar-t2-display.service"

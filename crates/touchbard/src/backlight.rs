@@ -11,6 +11,10 @@ use anyhow::{Context, Result, bail};
 const ACTIVE_LEVEL_255: u32 = 128;
 const DIMMED_LEVEL_255: u32 = 1;
 const IDLE_LEVEL_255: u32 = 0;
+/// `hid-appletb-bl` (Intel T2) exposes the panel's hardware steps directly:
+/// 0 off, 1 dim, 2 full. Scaling the 0..255 policy onto that range would
+/// collapse "active" onto the dim step.
+const DISCRETE_STEPS_MAX: u32 = 2;
 const KNOWN_NAMES: &[&str] = &[
     "appletb_backlight",
     "228200000.display-pipe.0",
@@ -60,11 +64,7 @@ impl TouchBarBacklight {
             if max == 0 {
                 bail!("Touch Bar backlight reported zero maximum brightness");
             }
-            let active_value = ((u64::from(ACTIVE_LEVEL_255) * u64::from(max) + 127) / 255)
-                .clamp(1, u64::from(max)) as u32;
-            let dimmed_value = ((u64::from(DIMMED_LEVEL_255) * u64::from(max) + 127) / 255)
-                .clamp(1, u64::from(max)) as u32;
-            let idle_value = u64::from(IDLE_LEVEL_255) * u64::from(max) / 255;
+            let (active_value, dimmed_value, idle_value) = brightness_levels(max);
             let brightness_path = entry.path().join("brightness");
             let brightness = OpenOptions::new()
                 .write(true)
@@ -76,7 +76,7 @@ impl TouchBarBacklight {
                 brightness,
                 active_value,
                 dimmed_value,
-                idle_value: idle_value as u32,
+                idle_value,
                 current_value: None,
             });
         }
@@ -132,6 +132,21 @@ impl Drop for TouchBarBacklight {
     }
 }
 
+/// Active, dimmed and idle values for a device whose range is `0..=max`.
+fn brightness_levels(max: u32) -> (u32, u32, u32) {
+    if max <= DISCRETE_STEPS_MAX {
+        return (max, 1.min(max), 0);
+    }
+    let scale = |level: u32| {
+        ((u64::from(level) * u64::from(max) + 127) / 255).clamp(1, u64::from(max)) as u32
+    };
+    (
+        scale(ACTIVE_LEVEL_255),
+        scale(DIMMED_LEVEL_255),
+        (u64::from(IDLE_LEVEL_255) * u64::from(max) / 255) as u32,
+    )
+}
+
 fn read_u32(path: &Path) -> Result<u32> {
     std::fs::read_to_string(path)
         .with_context(|| format!("read {}", path.display()))?
@@ -148,6 +163,19 @@ mod tests {
     fn discovery_is_limited_to_compiled_in_kernel_devices() {
         assert!(KNOWN_NAMES.iter().all(|name| !name.contains('/')));
         assert!(KNOWN_DRIVERS.iter().all(|name| !name.contains('/')));
+    }
+
+    #[test]
+    fn continuous_panels_scale_the_policy_levels() {
+        assert_eq!(brightness_levels(255), (128, 1, 0));
+        assert_eq!(brightness_levels(510), (256, 2, 0));
+    }
+
+    #[test]
+    fn t2_panel_uses_its_hardware_steps() {
+        // hid-appletb-bl: 0 off, 1 dim, 2 full.
+        assert_eq!(brightness_levels(2), (2, 1, 0));
+        assert_eq!(brightness_levels(1), (1, 1, 0));
     }
 
     #[test]

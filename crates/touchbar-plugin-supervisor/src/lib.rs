@@ -21,6 +21,7 @@ mod health;
 mod http;
 mod lifecycle;
 mod local;
+mod media;
 mod resources;
 mod runtime;
 mod secret;
@@ -56,7 +57,7 @@ pub use clipboard::{
     ClipboardMaterial, ClipboardTransport, WaylandClipboard, authorize_clipboard_request,
 };
 pub use command::{COMMAND_RUN_OPERATION, CommandRunBackend};
-pub use component_cgroup::{ComponentCgroup, component_task_limit};
+pub use component_cgroup::{COMPONENT_TASK_MARGIN, ComponentCgroup, component_task_limit};
 pub use context::{CONTEXT_SNAPSHOT_OPERATION, CONTEXT_SUBSCRIBE_OPERATION, ContextReadBackend};
 pub use dbus::{
     DBUS_CALL_OPERATION, DBUS_SUBSCRIBE_OPERATION, DBUS_SUBSCRIPTION_RESERVED_BYTES,
@@ -100,6 +101,7 @@ pub use local::{
     LocalConnectionAuthorization, LocalIpcBackend, authorize_local_connect_request,
     authorize_local_send_request,
 };
+pub use media::{MEDIA_COMMAND_OPERATION, MEDIA_SUBSCRIBE_OPERATION, MediaBackend, MediaSource};
 pub use resources::{
     OpenedResource, ResourceBackend, ResourceEventSink, ResourceHandle, ResourceLimits,
     ResourceManager,
