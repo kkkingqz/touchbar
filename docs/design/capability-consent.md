@@ -247,7 +247,7 @@ describes the real normalized scope and risks.
 | `http.request.v1` | Exact HTTPS origins, methods, optional path prefixes, and private-network flag | Reauthorize every redirect and resolved address; no ambient cookies, proxy, netrc, client certificate, or credentials. |
 | `dbus.call.v1` | Bus, well-known destination, object path, interface, member, and signature | Session bus is not itself a security boundary; deny bus administration, monitoring, arbitrary destinations, and activation by default. |
 | `dbus.subscribe.v1` | Exact senders/interfaces/members and bounded match rules | No eavesdropping; bounded queue with overflow markers and explicit unsubscribe. |
-| `command.run.v1` | Host/user-approved executable and typed argument templates | Never invokes a shell or searches plugin-controlled `PATH`; empty environment by default; strict output, process, and time limits. |
+| `command.run.v1` | Host/user-approved executable and typed argument templates | Never invokes a shell or searches plugin-controlled `PATH`; empty environment by default, plus only the session values a rule names (`runtime-dir` sets `XDG_RUNTIME_DIR` from the host, for clients such as `wpctl`); strict output, process, and time limits. |
 | `clipboard.read.v1` | MIME types, maximum bytes, and operation rate | Requires a fresh physical touch activation; never audited by content or offered-format list. |
 | `clipboard.write.v1` | MIME types, maximum bytes, and operation rate | Separate grant and a fresh physical touch activation; regular selection only in v1. |
 | `secret.read.v1` | User-mapped logical secret names | No ambient keyring enumeration; values are never logged and normally require activation. |
@@ -366,6 +366,7 @@ CommandRule {
   executable: host-path,
   arguments: list<CommandArgument>,
   environment: map<literal-name, literal-value>,
+  session_environment: set<runtime-dir>,
   working_directory: none | host-approved-absolute-path,
   maximum_output_bytes: u64,
   timeout_milliseconds: u32,

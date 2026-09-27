@@ -15,7 +15,7 @@ use touchbar_policy::{
     FilesystemMountRequest, FilesystemReadScope, GrantRecord, GrantStore, HttpMethod,
     HttpOriginRule, HttpRequestScope, MediaControlAction, MediaControlScope, MediaReadScope,
     PackageInstance, PermissionChangeKind, Provenance, ReusePolicy, RiskClass, RuntimeKind,
-    SessionGrants, UriOpenScope, calculate_effective_policy, diff_permissions,
+    SessionGrants, SessionVariable, UriOpenScope, calculate_effective_policy, diff_permissions,
     normalize_manifest_permissions, summarize_trust, validate_capability_scope,
 };
 
@@ -569,6 +569,7 @@ fn command_parameters_and_uri_paths_use_semantic_subset_rules() {
                     maximum,
                 }],
                 environment: BTreeMap::new(),
+                session_environment: BTreeSet::new(),
                 working_directory: None,
                 maximum_output_bytes: 1024,
                 timeout_milliseconds: 1000,
@@ -608,6 +609,7 @@ fn command_templates_reject_confusable_ids_slots_paths_and_loader_environment() 
             },
         ],
         environment: BTreeMap::from([("LD_PRELOAD".into(), "/tmp/evil.so".into())]),
+        session_environment: BTreeSet::new(),
         working_directory: Some("/tmp/../tmp".into()),
         maximum_output_bytes: 1024,
         timeout_milliseconds: 1000,
@@ -636,6 +638,45 @@ fn command_templates_reject_confusable_ids_slots_paths_and_loader_environment() 
 }
 
 #[test]
+fn a_session_runtime_dir_must_be_declared_and_counts_as_more_authority() {
+    let rule = |session: &[SessionVariable]| CommandRule {
+        id: "get-volume".into(),
+        executable: "/usr/bin/wpctl".into(),
+        arguments: Vec::new(),
+        environment: BTreeMap::new(),
+        session_environment: session.iter().copied().collect(),
+        working_directory: None,
+        maximum_output_bytes: 1024,
+        timeout_milliseconds: 1000,
+    };
+    let scope = |rule: CommandRule| {
+        CapabilityScope::CommandRun(CommandRunScope {
+            commands: BTreeSet::from([rule]),
+            maximum_parallel_processes: 1,
+        })
+    };
+    let with = scope(rule(&[SessionVariable::RuntimeDir]));
+    let without = scope(rule(&[]));
+    assert!(validate_capability_scope(&CapabilityId::CommandRunV1, &with).is_ok());
+    assert!(without.is_subset_of(&with));
+    assert!(
+        !with.is_subset_of(&without),
+        "an update that adds a session value needs new consent"
+    );
+
+    let mut conflicting = rule(&[SessionVariable::RuntimeDir]);
+    conflicting
+        .environment
+        .insert("XDG_RUNTIME_DIR".into(), "/tmp".into());
+    let errors = validate_capability_scope(&CapabilityId::CommandRunV1, &scope(conflicting))
+        .unwrap_err()
+        .into_iter()
+        .map(|error| error.message)
+        .collect::<Vec<_>>();
+    assert!(errors.iter().any(|error| error.contains("session value")));
+}
+
+#[test]
 fn command_approved_files_require_exact_user_owned_mount_bindings() {
     let scope = CapabilityScope::CommandRun(CommandRunScope {
         commands: BTreeSet::from([CommandRule {
@@ -646,6 +687,7 @@ fn command_approved_files_require_exact_user_owned_mount_bindings() {
                 mount: "gallery".into(),
             }],
             environment: BTreeMap::new(),
+            session_environment: BTreeSet::new(),
             working_directory: None,
             maximum_output_bytes: 1024,
             timeout_milliseconds: 1000,
@@ -812,6 +854,7 @@ fn risk_is_host_derived_and_highlights_exfiltration_and_interpreters() {
                 executable: "/usr/bin/bash".into(),
                 arguments: Vec::new(),
                 environment: BTreeMap::new(),
+                session_environment: BTreeSet::new(),
                 working_directory: None,
                 maximum_output_bytes: 1024,
                 timeout_milliseconds: 1000,

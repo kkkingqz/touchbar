@@ -15,8 +15,8 @@ pub use capability::{
     FilesystemWriteScope, HttpMethod, HttpOriginRule, HttpRequestScope, LocalConnectScope,
     LocalEndpointRequest, MediaControlAction, MediaControlScope, MediaReadScope,
     NormalizationError, NotificationScope, NotificationUrgency, RiskClass, RuntimeKind,
-    SecretReadScope, TrustSummary, UriOpenScope, WriteOperation, normalize_manifest_permissions,
-    summarize_trust, validate_capability_scope,
+    SecretReadScope, SessionVariable, TrustSummary, UriOpenScope, WriteOperation,
+    normalize_manifest_permissions, summarize_trust, validate_capability_scope,
 };
 pub use grant::{
     ClipboardBinding, Decision, EffectiveGrant, EffectivePolicy, FilesystemMountBinding,

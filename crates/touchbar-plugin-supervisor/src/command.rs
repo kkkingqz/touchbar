@@ -621,11 +621,22 @@ fn spawn_command(
             .div_ceil(1_000)
             .saturating_add(1),
     )?;
+    // Session values come from the supervisor's own environment, which the
+    // session daemon set up; a variable the session lacks is left unset.
+    let session_environment = prepared
+        .rule
+        .session_environment
+        .iter()
+        .filter_map(|variable| {
+            std::env::var_os(variable.name()).map(|value| (variable.name(), value))
+        })
+        .collect::<Vec<_>>();
     let mut command = Command::new(format!("/proc/self/fd/{executable_fd}"));
     command
         .args(&prepared.arguments)
         .env_clear()
         .envs(&prepared.rule.environment)
+        .envs(session_environment)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1380,7 +1391,7 @@ mod tests {
     use touchbar_package::GithubSource;
     use touchbar_policy::{
         CapabilityId, CapabilityScope, CommandArgument, CommandRule, CommandRunScope,
-        FilesystemMountBinding, PackageInstance, Provenance, RuntimeKind,
+        FilesystemMountBinding, PackageInstance, Provenance, RuntimeKind, SessionVariable,
     };
     use touchbar_protocol::broker_ipc::{BrokerErrorCode, BrokerResult};
 
@@ -1400,6 +1411,7 @@ mod tests {
             executable: executable.into(),
             arguments,
             environment: BTreeMap::new(),
+            session_environment: BTreeSet::new(),
             working_directory: None,
             maximum_output_bytes: 64 * 1024,
             timeout_milliseconds: 2_000,
@@ -1551,6 +1563,45 @@ mod tests {
             .flatten()
             .collect::<Vec<_>>();
         assert_eq!(output, b"SAFE_VALUE=fixed\n");
+    }
+
+    #[test]
+    fn the_runtime_directory_reaches_only_commands_that_name_it() {
+        use std::os::unix::fs::MetadataExt;
+
+        let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") else {
+            return;
+        };
+        // Some distributions link /usr/bin/env to a multicall binary, which
+        // the broker rightly refuses; GNU's own copy is a plain file there.
+        let Some(env) = ["/usr/bin/env", "/usr/bin/gnuenv"]
+            .into_iter()
+            .find(|path| {
+                fs::symlink_metadata(path)
+                    .is_ok_and(|metadata| metadata.file_type().is_file() && metadata.nlink() == 1)
+            })
+        else {
+            return;
+        };
+        let package = tempdir().unwrap();
+        let mut session_rule = rule(env, Vec::new());
+        session_rule.session_environment = BTreeSet::from([SessionVariable::RuntimeDir]);
+        let (_, results) = run_resource(
+            Arc::new(CommandRunBackend::new(package.path().to_owned())),
+            &request(session_rule, Vec::new(), BTreeMap::new(), 1),
+        );
+        let output = successful_payloads(&results)
+            .into_iter()
+            .filter_map(|payload| match CommandEvent::decode(payload).unwrap() {
+                CommandEvent::Stdout(bytes) => Some(bytes),
+                _ => None,
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+        let mut expected = b"XDG_RUNTIME_DIR=".to_vec();
+        expected.extend_from_slice(runtime.as_encoded_bytes());
+        expected.push(b'\n');
+        assert_eq!(output, expected);
     }
 
     #[test]

@@ -474,12 +474,34 @@ pub struct CommandRule {
     pub arguments: Vec<CommandArgument>,
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
+    /// Session values the host resolves itself, never the guest. A command
+    /// otherwise starts with only `environment`, and a client such as
+    /// `wpctl` cannot find the user's PipeWire socket without the runtime
+    /// directory.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub session_environment: BTreeSet<SessionVariable>,
     #[serde(default)]
     pub working_directory: Option<String>,
     #[serde(default = "default_command_output")]
     pub maximum_output_bytes: u64,
     #[serde(default = "default_command_timeout")]
     pub timeout_milliseconds: u32,
+}
+
+/// A session value a command may receive from the host's own environment.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionVariable {
+    /// `XDG_RUNTIME_DIR`: the user's session sockets, such as PipeWire's.
+    RuntimeDir,
+}
+
+impl SessionVariable {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::RuntimeDir => "XDG_RUNTIME_DIR",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1085,6 +1107,14 @@ fn validate_scope(
                         issue(format!("invalid environment value for {name}"));
                     }
                 }
+                for variable in &command.session_environment {
+                    if command.environment.contains_key(variable.name()) {
+                        issue(format!(
+                            "environment {} is also a session value",
+                            variable.name()
+                        ));
+                    }
+                }
                 if let Some(directory) = &command.working_directory {
                     let directory = Path::new(directory);
                     if !directory.is_absolute()
@@ -1445,6 +1475,7 @@ fn command_rule_subset(new: &CommandRule, old: &CommandRule) -> bool {
             .zip(&old.arguments)
             .all(|(new, old)| command_argument_subset(new, old))
         && new.environment == old.environment
+        && new.session_environment.is_subset(&old.session_environment)
         && new.working_directory == old.working_directory
         && new.maximum_output_bytes <= old.maximum_output_bytes
         && new.timeout_milliseconds <= old.timeout_milliseconds

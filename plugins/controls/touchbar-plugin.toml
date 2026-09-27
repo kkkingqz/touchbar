@@ -2,7 +2,7 @@ manifest_version = 1
 
 [plugin]
 name = "System Controls"
-version = "1.0.0"
+version = "1.1.0"
 description = "Theme-aware volume, brightness, microphone, battery, and power controls"
 license = "MIT OR Apache-2.0"
 source = "github:cameroncooper/touchbar-controls"
@@ -66,10 +66,23 @@ maximum_width = 140
 [[permission]]
 capability = "command.run.v1"
 required = false
-reason = "Apply user gestures to PipeWire, display brightness, and power profiles"
+reason = "Read and set the volume, display brightness, microphone and power profile when you touch their controls"
 
 [permission.scope]
 maximum_parallel_processes = 1
+
+# wpctl finds the user's PipeWire socket through XDG_RUNTIME_DIR; commands
+# otherwise start with an empty environment.
+[[permission.scope.commands]]
+id = "get-volume"
+executable = "/usr/bin/wpctl"
+arguments = [
+  { kind = "literal", value = "get-volume" },
+  { kind = "literal", value = "@DEFAULT_AUDIO_SINK@" },
+]
+session_environment = ["runtime-dir"]
+maximum_output_bytes = 4096
+timeout_milliseconds = 1000
 
 [[permission.scope.commands]]
 id = "set-volume"
@@ -79,6 +92,18 @@ arguments = [
   { kind = "literal", value = "@DEFAULT_AUDIO_SINK@" },
   { kind = "bounded-text", name = "percent", maximum_bytes = 4 },
 ]
+session_environment = ["runtime-dir"]
+maximum_output_bytes = 4096
+timeout_milliseconds = 1000
+
+[[permission.scope.commands]]
+id = "get-microphone"
+executable = "/usr/bin/wpctl"
+arguments = [
+  { kind = "literal", value = "get-volume" },
+  { kind = "literal", value = "@DEFAULT_AUDIO_SOURCE@" },
+]
+session_environment = ["runtime-dir"]
 maximum_output_bytes = 4096
 timeout_milliseconds = 1000
 
@@ -90,6 +115,17 @@ arguments = [
   { kind = "literal", value = "@DEFAULT_AUDIO_SOURCE@" },
   { kind = "literal", value = "toggle" },
 ]
+session_environment = ["runtime-dir"]
+maximum_output_bytes = 4096
+timeout_milliseconds = 1000
+
+[[permission.scope.commands]]
+id = "get-brightness"
+executable = "/usr/bin/brightnessctl"
+arguments = [
+  { kind = "literal", value = "--class=backlight" },
+  { kind = "literal", value = "-m" },
+]
 maximum_output_bytes = 4096
 timeout_milliseconds = 1000
 
@@ -97,9 +133,17 @@ timeout_milliseconds = 1000
 id = "set-brightness"
 executable = "/usr/bin/brightnessctl"
 arguments = [
+  { kind = "literal", value = "--class=backlight" },
   { kind = "literal", value = "set" },
   { kind = "bounded-text", name = "percent", maximum_bytes = 4 },
 ]
+maximum_output_bytes = 4096
+timeout_milliseconds = 1000
+
+[[permission.scope.commands]]
+id = "get-power-profile"
+executable = "/usr/bin/powerprofilesctl"
+arguments = [{ kind = "literal", value = "get" }]
 maximum_output_bytes = 4096
 timeout_milliseconds = 1000
 
