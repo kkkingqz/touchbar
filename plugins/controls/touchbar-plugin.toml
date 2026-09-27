@@ -2,7 +2,7 @@ manifest_version = 1
 
 [plugin]
 name = "System Controls"
-version = "1.1.0"
+version = "1.2.0"
 description = "Theme-aware volume, brightness, microphone, battery, and power controls"
 license = "MIT OR Apache-2.0"
 source = "github:cameroncooper/touchbar-controls"
@@ -83,10 +83,11 @@ maximum_width = 460
 [[permission]]
 capability = "command.run.v1"
 required = false
-reason = "Read and set the volume, display brightness, microphone and power profile when you touch their controls"
+reason = "Read and set the volume, display brightness, microphone and power profile, and follow their changes"
 
 [permission.scope]
-maximum_parallel_processes = 1
+# One read or write at a time, and the two watchers.
+maximum_parallel_processes = 3
 
 # wpctl finds the user's PipeWire socket through XDG_RUNTIME_DIR; commands
 # otherwise start with an empty environment.
@@ -124,6 +125,33 @@ arguments = [
 session_environment = ["runtime-dir"]
 maximum_output_bytes = 4096
 timeout_milliseconds = 1000
+
+# Reports every change of the sinks, sources and defaults, so the volume
+# follows the keyboard and other applications. It stops at the time limit and
+# the plugin starts it again.
+[[permission.scope.commands]]
+id = "watch-audio"
+executable = "/usr/bin/pactl"
+arguments = [{ kind = "literal", value = "subscribe" }]
+session_environment = ["runtime-dir"]
+maximum_output_bytes = 262144
+timeout_milliseconds = 60000
+
+# GNOME Shell signals every change of the display brightness.
+[[permission.scope.commands]]
+id = "watch-brightness"
+executable = "/usr/bin/gdbus"
+arguments = [
+  { kind = "literal", value = "monitor" },
+  { kind = "literal", value = "--session" },
+  { kind = "literal", value = "--dest" },
+  { kind = "literal", value = "org.gnome.Shell.Brightness" },
+  { kind = "literal", value = "--object-path" },
+  { kind = "literal", value = "/org/gnome/Shell/Brightness" },
+]
+session_environment = ["runtime-dir"]
+maximum_output_bytes = 65536
+timeout_milliseconds = 60000
 
 [[permission.scope.commands]]
 id = "get-microphone"

@@ -2,10 +2,13 @@
 //! power profile.
 //!
 //! Levels are read from the system with `command.run.v1` (`wpctl`,
-//! `brightnessctl`, `powerprofilesctl`) when the plugin starts and whenever
-//! one of its controls is touched, so a slider starts where the system is
-//! rather than at a guess. Only one command runs at a time: a drag queues
-//! only its latest value, so the level lands where the finger stops.
+//! `brightnessctl`, `powerprofilesctl`) when the plugin starts, whenever one
+//! of its controls is touched, and whenever the system reports a change:
+//! `pactl subscribe` for the volume and microphone, GNOME Shell's
+//! `BrightnessChanged` signal for the display. Those watchers stop at the
+//! command time limit and start again. Only one read or write runs at a
+//! time: a drag queues only its latest value, so the level lands where the
+//! finger stops.
 
 use std::{
     cell::RefCell,
@@ -41,6 +44,14 @@ const MAXIMUM_OUTPUT_BYTES: usize = 1024;
 /// A command not finished by then lost its events; the next one may start.
 /// The commands themselves time out after one second.
 const ABANDON_AFTER: Duration = Duration::from_secs(3);
+/// Watchers stop at 60 seconds; one silent for longer lost its events.
+const ABANDON_WATCH_AFTER: Duration = Duration::from_secs(70);
+/// A watcher that ends sooner failed; after this many in a row it is not
+/// started again until one of its controls is touched.
+const WATCH_HEALTHY_AFTER: Duration = Duration::from_secs(5);
+const WATCH_ATTEMPTS: u8 = 3;
+/// Events of resources whose completion has not arrived yet.
+const MAXIMUM_EARLY_EVENTS: usize = 32;
 
 struct Plugin;
 
@@ -104,21 +115,71 @@ impl Job {
     }
 }
 
-struct Running {
-    job: Job,
-    request: u64,
-    resource: Option<u64>,
-    stdout: Vec<u8>,
-    started: Instant,
+/// A long-running command that reports system changes line by line.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Watch {
+    /// `pactl subscribe`: sinks, sources and the server's defaults.
+    Audio,
+    /// GNOME Shell's `BrightnessChanged` through `gdbus monitor`.
+    Brightness,
 }
 
-impl Running {
-    /// Whether a resource event is this command's. The completion that names
-    /// the resource can arrive after the resource's first events, and this
-    /// plugin opens no other resources, so an event before it counts too.
-    fn owns(&self, resource: u64) -> bool {
-        self.resource.is_none_or(|own| own == resource)
+impl Watch {
+    const ALL: [Self; 2] = [Self::Audio, Self::Brightness];
+
+    fn index(self) -> usize {
+        self as usize
     }
+
+    fn request(self) -> CommandRunRequest {
+        CommandRunRequest {
+            command_id: match self {
+                Self::Audio => "watch-audio",
+                Self::Brightness => "watch-brightness",
+            }
+            .into(),
+            values: Vec::new(),
+        }
+    }
+
+    /// The reads one line of output calls for.
+    fn reads(self, line: &str) -> Vec<Job> {
+        let mut reads = Vec::new();
+        match self {
+            Self::Audio => {
+                // "Event 'change' on sink #56"; a new default is a server change.
+                let server = line.contains(" on server");
+                if server || line.contains(" on sink #") {
+                    reads.push(Job::ReadVolume);
+                }
+                if server || line.contains(" on source #") {
+                    reads.push(Job::ReadMicrophone);
+                }
+            }
+            Self::Brightness => {
+                if line.contains("BrightnessChanged") {
+                    reads.push(Job::ReadBrightness);
+                }
+            }
+        }
+        reads
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Task {
+    Job(Job),
+    Watch(Watch),
+}
+
+/// A command in flight: a job, or a watcher.
+struct Running {
+    task: Task,
+    request: u64,
+    resource: Option<u64>,
+    /// A job's whole output, or a watcher's unfinished line.
+    stdout: Vec<u8>,
+    started: Instant,
 }
 
 struct Controls {
@@ -136,7 +197,13 @@ struct Controls {
     /// The slider a finger holds; reads do not move it meanwhile.
     dragging: Option<u64>,
     queue: VecDeque<Job>,
-    running: Option<Running>,
+    running: Vec<Running>,
+    /// Resource events that arrived before their completion.
+    early: VecDeque<(u64, OperationResult)>,
+    /// The watchers this process's items need, found when they render.
+    wanted: [bool; 2],
+    /// Watchers that ended early, in a row.
+    watch_failures: [u8; 2],
 }
 
 impl Default for Controls {
@@ -152,7 +219,10 @@ impl Default for Controls {
             presentation: 0,
             dragging: None,
             queue: VecDeque::new(),
-            running: None,
+            running: Vec::new(),
+            early: VecDeque::new(),
+            wanted: [false; 2],
+            watch_failures: [0; 2],
         }
     }
 }
@@ -169,7 +239,13 @@ impl Guest for Plugin {
     }
 
     fn render(request: RenderRequest) -> Result<View, String> {
-        CONTROLS.with_borrow(|controls| {
+        CONTROLS.with_borrow_mut(|controls| {
+            // Each item runs in its own process; only its own watcher runs.
+            match request.item_id.as_str() {
+                "volume" | "microphone" => controls.wanted[Watch::Audio.index()] = true,
+                "brightness" => controls.wanted[Watch::Brightness.index()] = true,
+                _ => {}
+            }
             Ok(match request.item_id.as_str() {
                 "volume" => continuous_view(
                     VOLUME_BUTTON,
@@ -235,9 +311,19 @@ impl Controls {
         let mut presentation = None;
         match (event.widget_id, event.kind) {
             // A touch on a control first refreshes what it shows.
-            (VOLUME_BUTTON, InputKind::Pressed) => self.enqueue(Job::ReadVolume),
-            (BRIGHTNESS_BUTTON, InputKind::Pressed) => self.enqueue(Job::ReadBrightness),
-            (MICROPHONE_BUTTON, InputKind::Pressed) => self.enqueue(Job::ReadMicrophone),
+            // A touch also gives a failed watcher another chance.
+            (VOLUME_BUTTON, InputKind::Pressed) => {
+                self.watch_failures[Watch::Audio.index()] = 0;
+                self.enqueue(Job::ReadVolume);
+            }
+            (BRIGHTNESS_BUTTON, InputKind::Pressed) => {
+                self.watch_failures[Watch::Brightness.index()] = 0;
+                self.enqueue(Job::ReadBrightness);
+            }
+            (MICROPHONE_BUTTON, InputKind::Pressed) => {
+                self.watch_failures[Watch::Audio.index()] = 0;
+                self.enqueue(Job::ReadMicrophone);
+            }
             (POWER_BUTTON, InputKind::Pressed) => self.enqueue(Job::ReadPowerProfile),
             // As on macOS, a touch opens the slider and a hold opens it until
             // the finger lifts.
@@ -312,75 +398,152 @@ impl Controls {
                 }
                 if !granted {
                     self.queue.clear();
-                    self.running = None;
+                    self.running.clear();
+                    self.early.clear();
                 }
                 true
             }
-            HostEvent::Completion((request, result))
-                if self
+            HostEvent::Completion((request, result)) => {
+                let Some(index) = self
                     .running
-                    .as_ref()
-                    .is_some_and(|running| running.request == request) =>
-            {
+                    .iter()
+                    .position(|running| running.request == request)
+                else {
+                    return false;
+                };
                 let opened = match result {
                     OperationResult::Success(payload) => decode_command_opened(&payload).ok(),
                     OperationResult::Error(_) => None,
                 };
-                match (opened, &mut self.running) {
-                    (Some(resource), Some(running)) => running.resource = Some(resource.into_raw()),
-                    _ => self.running = None,
+                let Some(resource) = opened.map(|resource| resource.into_raw()) else {
+                    let failed = self.running.remove(index);
+                    self.ended(&failed);
+                    return false;
+                };
+                self.running[index].resource = Some(resource);
+                let early = std::mem::take(&mut self.early);
+                let mut rerender = false;
+                for (id, result) in early {
+                    if id == resource {
+                        rerender |= self.resource_event(resource, result);
+                    } else {
+                        self.early.push_back((id, result));
+                    }
+                }
+                rerender
+            }
+            HostEvent::ResourceEvent((resource, _, result)) => {
+                if self
+                    .running
+                    .iter()
+                    .any(|running| running.resource == Some(resource))
+                {
+                    return self.resource_event(resource, result);
+                }
+                // Its completion may still be on the way.
+                if self
+                    .running
+                    .iter()
+                    .any(|running| running.resource.is_none())
+                {
+                    if self.early.len() == MAXIMUM_EARLY_EVENTS {
+                        self.early.pop_front();
+                    }
+                    self.early.push_back((resource, result));
                 }
                 false
             }
-            // Events were dropped: the running command may never report its
-            // end, and a level may have been missed.
+            // Events were dropped: a command may never report its end, and a
+            // level may have been missed.
             HostEvent::Overflow(_) => {
-                self.running = None;
+                self.running.clear();
+                self.early.clear();
                 self.read_everything();
                 false
             }
-            HostEvent::ResourceEvent((resource, _, result))
-                if self
-                    .running
-                    .as_ref()
-                    .is_some_and(|running| running.owns(resource)) =>
-            {
-                let Some(running) = &mut self.running else {
-                    return false;
-                };
-                running.resource = Some(resource);
-                let event = match result {
-                    OperationResult::Success(payload) => decode_command_event(&payload).ok(),
-                    OperationResult::Error(_) => None,
-                };
-                match event {
-                    Some(CommandEvent::Stdout(bytes)) => {
+            HostEvent::Shutdown(_) => {
+                self.queue.clear();
+                self.running.clear();
+                self.early.clear();
+                self.wanted = [false; 2];
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// One event of a known command. Returns whether a level changed.
+    fn resource_event(&mut self, resource: u64, result: OperationResult) -> bool {
+        let Some(index) = self
+            .running
+            .iter()
+            .position(|running| running.resource == Some(resource))
+        else {
+            return false;
+        };
+        let event = match result {
+            OperationResult::Success(payload) => decode_command_event(&payload).ok(),
+            OperationResult::Error(_) => None,
+        };
+        match event {
+            Some(CommandEvent::Stdout(bytes)) => {
+                let running = &mut self.running[index];
+                match running.task {
+                    Task::Job(_) => {
                         let room = MAXIMUM_OUTPUT_BYTES.saturating_sub(running.stdout.len());
                         running.stdout.extend(bytes.into_iter().take(room));
-                        false
                     }
-                    Some(CommandEvent::Stderr(_)) => false,
-                    Some(CommandEvent::Exited { exit_code, .. }) => {
-                        let finished = self.running.take();
-                        if let Some(finished) = finished
-                            && exit_code == Some(0)
+                    Task::Watch(watch) => {
+                        running.stdout.extend(bytes);
+                        let mut reads = Vec::new();
+                        while let Some(end) = running.stdout.iter().position(|byte| *byte == b'\n')
                         {
-                            self.apply_output(finished.job, &finished.stdout);
+                            let line = running.stdout.drain(..=end).collect::<Vec<_>>();
+                            reads.extend(watch.reads(&String::from_utf8_lossy(&line)));
                         }
+                        // A line this long is not one of the watchers' lines.
+                        if running.stdout.len() > MAXIMUM_OUTPUT_BYTES {
+                            running.stdout.clear();
+                        }
+                        for read in reads {
+                            self.enqueue(read);
+                        }
+                    }
+                }
+                false
+            }
+            Some(CommandEvent::Stderr(_)) => false,
+            Some(CommandEvent::Exited { exit_code, .. }) => {
+                let finished = self.running.remove(index);
+                match finished.task {
+                    Task::Job(job) if exit_code == Some(0) => {
+                        self.apply_output(job, &finished.stdout);
                         true
                     }
-                    None => {
-                        self.running = None;
+                    _ => {
+                        self.ended(&finished);
                         false
                     }
                 }
             }
-            HostEvent::Shutdown(_) => {
-                self.queue.clear();
-                self.running = None;
+            None => {
+                let failed = self.running.remove(index);
+                self.ended(&failed);
                 false
             }
-            _ => false,
+        }
+    }
+
+    /// Books a watcher's end: one that ran a while is simply started again,
+    /// one that failed at once counts towards giving up.
+    fn ended(&mut self, running: &Running) {
+        if let Task::Watch(watch) = running.task {
+            let failures = &mut self.watch_failures[watch.index()];
+            if running.started.elapsed() >= WATCH_HEALTHY_AFTER {
+                *failures = 0;
+            } else {
+                *failures = failures.saturating_add(1);
+            }
         }
     }
 
@@ -406,31 +569,62 @@ impl Controls {
         }
     }
 
-    /// Starts the next job if none runs. Broker requests are accepted only
-    /// in input and host-event callbacks, which is where this is called.
+    /// Starts the next job if none runs, and every wanted watcher that is
+    /// not running. Broker requests are accepted only in input and
+    /// host-event callbacks, which is where this is called.
     fn pump(&mut self) {
-        if self
-            .running
-            .as_ref()
-            .is_some_and(|running| running.started.elapsed() >= ABANDON_AFTER)
-        {
-            self.running = None;
+        self.running.retain(|running| {
+            let limit = match running.task {
+                Task::Job(_) => ABANDON_AFTER,
+                Task::Watch(_) => ABANDON_WATCH_AFTER,
+            };
+            running.started.elapsed() < limit
+        });
+        if !self.commands {
+            return;
         }
-        while self.running.is_none() {
+        while !self
+            .running
+            .iter()
+            .any(|running| matches!(running.task, Task::Job(_)))
+        {
             let Some(job) = self.queue.pop_front() else {
-                return;
+                break;
             };
             let Some(request) = job.request(self.brightness_device.as_deref()) else {
                 continue;
             };
-            if let Ok(request) = command_run(&request) {
-                self.running = Some(Running {
-                    job,
-                    request: request.into_raw(),
-                    resource: None,
-                    stdout: Vec::new(),
-                    started: Instant::now(),
-                });
+            self.start(Task::Job(job), &request);
+        }
+        for watch in Watch::ALL {
+            let running = self
+                .running
+                .iter()
+                .any(|running| running.task == Task::Watch(watch));
+            if self.wanted[watch.index()]
+                && !running
+                && self.watch_failures[watch.index()] < WATCH_ATTEMPTS
+            {
+                self.start(Task::Watch(watch), &watch.request());
+            }
+        }
+    }
+
+    fn start(&mut self, task: Task, request: &CommandRunRequest) {
+        match command_run(request) {
+            Ok(id) => self.running.push(Running {
+                task,
+                request: id.into_raw(),
+                resource: None,
+                stdout: Vec::new(),
+                started: Instant::now(),
+            }),
+            // Refused at once, for example by the process quota.
+            Err(_) => {
+                if let Task::Watch(watch) = task {
+                    let failures = &mut self.watch_failures[watch.index()];
+                    *failures = failures.saturating_add(1);
+                }
             }
         }
     }
@@ -703,6 +897,8 @@ touchbar_component_sdk::export!(Plugin);
 
 #[cfg(test)]
 mod tests {
+    use touchbar_component_sdk::CommandOpened;
+
     use super::*;
 
     #[test]
@@ -778,14 +974,24 @@ mod tests {
             commands: true,
             ..Controls::default()
         };
-        controls.running = Some(Running {
-            job: Job::ReadVolume,
+        controls.running.push(Running {
+            task: Task::Job(Job::ReadVolume),
             request: 1,
             resource: Some(1),
             stdout: Vec::new(),
             started: Instant::now(),
         });
         controls
+    }
+
+    fn watching(controls: &mut Controls, watch: Watch, resource: u64) {
+        controls.running.push(Running {
+            task: Task::Watch(watch),
+            request: 100 + resource,
+            resource: Some(resource),
+            stdout: Vec::new(),
+            started: Instant::now(),
+        });
     }
 
     fn stdout(resource: u64, text: &str) -> HostEvent {
@@ -820,16 +1026,15 @@ mod tests {
     #[test]
     fn output_that_overtakes_the_completion_still_counts() {
         let mut controls = granted();
-        let running = controls.running.as_mut().unwrap();
-        running.resource = None;
+        controls.running[0].resource = None;
         assert!(!controls.host_event(stdout(9, "Volume: 0.89\n")));
-        assert!(controls.host_event(exited(9)));
+        assert!(!controls.host_event(exited(9)));
+        assert_eq!(controls.volume, None, "held until the completion names it");
+        let opened = CommandOpened { resource_id: 9 }.encode().unwrap();
+        let completion = HostEvent::Completion((1, OperationResult::Success(opened)));
+        assert!(controls.host_event(completion));
         assert_eq!(controls.volume, Some(89));
-        assert!(controls.running.is_none());
-        // The late completion names a command that already ended.
-        let late = HostEvent::Completion((1, OperationResult::Success(Vec::new())));
-        assert!(!controls.host_event(late));
-        assert!(controls.running.is_none());
+        assert!(controls.running.is_empty() && controls.early.is_empty());
     }
 
     #[test]
@@ -837,8 +1042,67 @@ mod tests {
         let mut controls = granted();
         assert!(!controls.host_event(stdout(2, "Volume: 0.10\n")));
         assert!(!controls.host_event(exited(2)));
-        assert!(controls.running.is_some());
+        assert_eq!(controls.running.len(), 1);
+        assert!(
+            controls.early.is_empty(),
+            "every command's resource is known"
+        );
         assert_eq!(controls.volume, None);
+    }
+
+    #[test]
+    fn watchers_turn_system_changes_into_reads() {
+        let mut controls = granted();
+        watching(&mut controls, Watch::Audio, 7);
+        watching(&mut controls, Watch::Brightness, 8);
+        // A line may arrive in pieces; streams and their clients are ignored.
+        controls.host_event(stdout(7, "Event 'change' on sink-input #91\nEvent 'chan"));
+        assert!(controls.queue.is_empty());
+        controls.host_event(stdout(7, "ge' on sink #56\n"));
+        assert_eq!(controls.queue, [Job::ReadVolume]);
+        controls.host_event(stdout(7, "Event 'change' on source #57\n"));
+        controls.host_event(stdout(7, "Event 'change' on server #-1\n"));
+        assert_eq!(controls.queue, [Job::ReadVolume, Job::ReadMicrophone]);
+        controls.host_event(stdout(
+            8,
+            "/org/gnome/Shell/Brightness: org.gnome.Shell.Brightness.BrightnessChanged ()\n",
+        ));
+        assert_eq!(
+            controls.queue,
+            [Job::ReadVolume, Job::ReadMicrophone, Job::ReadBrightness]
+        );
+    }
+
+    #[test]
+    fn a_watcher_that_fails_at_once_is_given_up_until_a_touch() {
+        let mut controls = granted();
+        for _ in 0..WATCH_ATTEMPTS {
+            watching(&mut controls, Watch::Audio, 7);
+            controls.host_event(exited(7));
+        }
+        assert_eq!(
+            controls.watch_failures[Watch::Audio.index()],
+            WATCH_ATTEMPTS
+        );
+        controls.input(&InputEvent {
+            item_id: "volume".into(),
+            widget_id: VOLUME_BUTTON,
+            kind: InputKind::Pressed,
+            value: None,
+            contact_id: Some(1),
+        });
+        assert_eq!(controls.watch_failures[Watch::Audio.index()], 0);
+
+        // One that ran its minute is simply started again.
+        controls.running.push(Running {
+            task: Task::Watch(Watch::Audio),
+            request: 200,
+            resource: Some(20),
+            stdout: Vec::new(),
+            started: Instant::now() - Duration::from_secs(60),
+        });
+        controls.host_event(exited(20));
+        assert_eq!(controls.watch_failures[Watch::Audio.index()], 0);
     }
 
     #[test]
@@ -904,7 +1168,7 @@ mod tests {
             ]
         );
         controls.host_event(state(CapabilityStatus::Denied));
-        assert!(controls.queue.is_empty() && controls.running.is_none());
+        assert!(controls.queue.is_empty() && controls.running.is_empty());
     }
 
     #[test]
