@@ -259,12 +259,18 @@ inspect normalized requests with `touchbarctl plugin permissions SOURCE` and
 choose `allow`, `deny`, or `reset` with an explicit `--session` or
 `--persistent` lifetime. Keep author reasons short and factual. Treat every
 optional capability as dynamically revocable: finish rendering immediately,
-submit broker work only from input or host-event callbacks, and respond to the
-capability-change event by closing affected UI state or showing a safe disabled
-state. The host reports every capability's initial state as a
+submit broker work only from input, host-event or visibility callbacks, and
+respond to the capability-change event by closing affected UI state or showing
+a safe disabled state. The host reports every capability's initial state as a
 capability-change event before the first render, so a glanceable item can open
-its subscriptions without waiting for a touch. Use `--format json` in
-agent-driven setup and tests.
+its subscriptions without waiting for a touch. Work that depends on what the
+item rendered, such as a watcher for an item that starts off the bar, belongs
+in `handle-visibility-changed`: a component built for the
+`visibility-aware-plugin` world (`touchbar_component_sdk::visibility`, exported
+with `export_visibility_aware!`) hears when each item comes on the bar after
+its render and when it leaves. Components built for `plugin` keep working
+without it; the first-party Controls pack in `plugins/controls` is the
+reference. Use `--format json` in agent-driven setup and tests.
 
 Run `touchbarctl plugin context --format json` when an agent needs a compact machine-readable summary.
 Use `touchbarctl plugin search` for the bundled reviewed catalog. Catalog

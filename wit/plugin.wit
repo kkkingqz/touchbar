@@ -554,6 +554,28 @@ world plugin {
     export handle-host-event: func(event: host-event) -> result<update, string>;
 }
 
+/// Item lifecycle callbacks a component may export; see
+/// `visibility-aware-plugin`.
+interface visibility {
+    use ui.{update};
+
+    /// The item is on the bar (`visible` true) or off it. The first call
+    /// follows the item's first render, so a component can start the work a
+    /// visible item needs, such as a subscription, without waiting for a
+    /// touch; broker requests are accepted here as in `handle-host-event`.
+    /// The item stays renderable while hidden.
+    handle-visibility-changed: func(item-id: string, visible: bool) -> result<update, string>;
+}
+
+/// `plugin` that also exports `visibility`. The host calls it only when a
+/// component exports it, so a component built against `plugin` keeps
+/// working unchanged.
+world visibility-aware-plugin {
+    include plugin;
+
+    export visibility;
+}
+
 /// A package-owned background worker that can publish semantic appearance
 /// values without being coupled to any visual item or compositor surface.
 world appearance-provider {

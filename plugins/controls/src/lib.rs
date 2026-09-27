@@ -3,10 +3,11 @@
 //!
 //! Levels are read from the system with `command.run.v1` (`wpctl`,
 //! `brightnessctl`, `powerprofilesctl`) when the plugin starts, whenever one
-//! of its controls is touched, and whenever the system reports a change:
-//! `pactl subscribe` for the volume and microphone, GNOME Shell's
-//! `BrightnessChanged` signal for the display. Those watchers stop at the
-//! command time limit and start again. Only one read or write runs at a
+//! of its controls is touched or comes on the bar unwatched, and whenever
+//! the system reports a change: `pactl subscribe` for the volume and
+//! microphone, GNOME Shell's `BrightnessChanged` signal for the display.
+//! Those watchers start when their item is first shown, stop at the command
+//! time limit and start again. Only one read or write runs at a
 //! time: a drag queues only its latest value, so the level lands where the
 //! finger stops.
 
@@ -20,8 +21,11 @@ use touchbar_component_sdk::kit::{
     ColorRole, Icon, InputEvent, InputKind, Pressable, Representation, ViewBuilder, content, fixed,
     flexible,
 };
+use touchbar_component_sdk::visibility::{
+    Guest, exports::touchbar::plugin::visibility::Guest as VisibilityGuest,
+};
 use touchbar_component_sdk::{
-    CommandEvent, CommandRunRequest, CommandValue, Guest, HostEvent, Item, PresentationEvent,
+    CommandEvent, CommandRunRequest, CommandValue, HostEvent, Item, PresentationEvent,
     RenderRequest, Update, View, command_run, decode_command_event, decode_command_opened,
     touchbar::plugin::{
         broker::{CapabilityStatus, OperationResult},
@@ -306,6 +310,21 @@ impl Guest for Plugin {
     }
 }
 
+impl VisibilityGuest for Plugin {
+    fn handle_visibility_changed(item_id: String, visible: bool) -> Result<Update, String> {
+        if visible {
+            CONTROLS.with_borrow_mut(|controls| {
+                controls.shown(&item_id);
+                controls.pump();
+            });
+        }
+        Ok(Update {
+            rerender: false,
+            presentation: None,
+        })
+    }
+}
+
 impl Controls {
     fn input(&mut self, event: &InputEvent) -> Update {
         let mut presentation = None;
@@ -547,6 +566,28 @@ impl Controls {
         }
     }
 
+    /// An item comes on the bar showing its last level, which may be stale
+    /// if nothing watched it: read it again. The pump that follows starts
+    /// the watcher of an item hidden at startup, which first renders now.
+    fn shown(&mut self, item: &str) {
+        let (watch, job) = match item {
+            "volume" => (Some(Watch::Audio), Job::ReadVolume),
+            "microphone" => (Some(Watch::Audio), Job::ReadMicrophone),
+            "brightness" => (Some(Watch::Brightness), Job::ReadBrightness),
+            "power-profile" => (None, Job::ReadPowerProfile),
+            _ => return,
+        };
+        if !watch.is_some_and(|watch| self.watching(watch)) {
+            self.enqueue(job);
+        }
+    }
+
+    fn watching(&self, watch: Watch) -> bool {
+        self.running
+            .iter()
+            .any(|running| running.task == Task::Watch(watch))
+    }
+
     fn read_everything(&mut self) {
         for job in [
             Job::ReadVolume,
@@ -570,8 +611,8 @@ impl Controls {
     }
 
     /// Starts the next job if none runs, and every wanted watcher that is
-    /// not running. Broker requests are accepted only in input and
-    /// host-event callbacks, which is where this is called.
+    /// not running. Broker requests are accepted only in input, host-event
+    /// and visibility callbacks, which is where this is called.
     fn pump(&mut self) {
         self.running.retain(|running| {
             let limit = match running.task {
@@ -597,12 +638,8 @@ impl Controls {
             self.start(Task::Job(job), &request);
         }
         for watch in Watch::ALL {
-            let running = self
-                .running
-                .iter()
-                .any(|running| running.task == Task::Watch(watch));
             if self.wanted[watch.index()]
-                && !running
+                && !self.watching(watch)
                 && self.watch_failures[watch.index()] < WATCH_ATTEMPTS
             {
                 self.start(Task::Watch(watch), &watch.request());
@@ -893,7 +930,7 @@ fn profile(value: u32) -> &'static str {
     }
 }
 
-touchbar_component_sdk::export!(Plugin);
+touchbar_component_sdk::export_visibility_aware!(Plugin);
 
 #[cfg(test)]
 mod tests {
@@ -1136,6 +1173,21 @@ mod tests {
         controls.queue.clear();
         controls.apply_output(Job::ReadVolume, b"Volume: 0.89\n");
         assert_eq!(controls.volume, Some(89));
+    }
+
+    #[test]
+    fn a_shown_item_reads_its_level_unless_watched() {
+        let mut controls = granted();
+        controls.shown("volume");
+        controls.shown("power-profile");
+        controls.shown("battery");
+        assert_eq!(controls.queue, [Job::ReadVolume, Job::ReadPowerProfile]);
+        controls.queue.clear();
+        watching(&mut controls, Watch::Audio, 7);
+        controls.shown("volume");
+        controls.shown("microphone");
+        controls.shown("brightness");
+        assert_eq!(controls.queue, [Job::ReadBrightness]);
     }
 
     #[test]

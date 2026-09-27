@@ -45,7 +45,7 @@ use touchbar_ui::{
     SvgAsset, SvgRasterizer, TextAlign, TextMeasurement, TextOverflow, Theme, VisualTransform,
     WidgetId,
 };
-use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
+use wasmtime::component::{Component, HasSelf, Linker, ResourceTable, TypedFunc};
 use wasmtime::error::Context as _;
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
@@ -71,6 +71,11 @@ use bindings::touchbar::plugin::broker as wit_broker;
 use bindings::touchbar::plugin::ui as wit;
 
 static NEXT_SURFACE_INSTANCE: AtomicU64 = AtomicU64::new(1);
+
+/// Exported by `visibility-aware-plugin` components only.
+const VISIBILITY_INTERFACE: &str = "touchbar:plugin/visibility@1.0.0";
+const VISIBILITY_FUNCTION: &str = "handle-visibility-changed";
+type VisibilityFunc = TypedFunc<(String, bool), (Result<wit::Update, String>,)>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ColorScheme {
@@ -714,6 +719,7 @@ pub fn read_supervisor_file(environment: &str, maximum_bytes: u64) -> Result<Opt
 pub struct PluginHost {
     store: Store<HostState>,
     bindings: Plugin,
+    visibility: Option<VisibilityFunc>,
     limits: HostLimits,
     animations: AnimationRegistry,
     effects: EffectRegistry,
@@ -1111,21 +1117,10 @@ impl PluginHost {
         broker: Option<BrokerClient>,
     ) -> Result<Self> {
         let path = path.as_ref();
-        let (engine, mut store) = create_store(limits, broker)?;
+        let (engine, store) = create_store(limits, broker)?;
         let component = Component::from_file(&engine, path)
             .with_context(|| format!("compile component {}", path.display()))?;
-        let linker = create_linker(&engine)?;
-        let bindings = Plugin::instantiate(&mut store, &component, &linker)
-            .context("instantiate component without ambient capabilities")?;
-        Ok(Self {
-            store,
-            bindings,
-            limits,
-            animations: AnimationRegistry::default(),
-            effects: EffectRegistry::default(),
-            guest_render_calls: 0,
-            assets: PackageAssets::default(),
-        })
+        Self::instantiate(&engine, store, &component, limits)
     }
 
     pub fn from_bytes(bytes: &[u8], limits: HostLimits) -> Result<Self> {
@@ -1137,14 +1132,41 @@ impl PluginHost {
         limits: HostLimits,
         broker: Option<BrokerClient>,
     ) -> Result<Self> {
-        let (engine, mut store) = create_store(limits, broker)?;
+        let (engine, store) = create_store(limits, broker)?;
         let component = Component::new(&engine, bytes).context("compile component")?;
-        let linker = create_linker(&engine)?;
-        let bindings = Plugin::instantiate(&mut store, &component, &linker)
+        Self::instantiate(&engine, store, &component, limits)
+    }
+
+    fn instantiate(
+        engine: &Engine,
+        mut store: Store<HostState>,
+        component: &Component,
+        limits: HostLimits,
+    ) -> Result<Self> {
+        let linker = create_linker(engine)?;
+        let instance = linker
+            .instantiate(&mut store, component)
             .context("instantiate component without ambient capabilities")?;
+        let bindings = Plugin::new(&mut store, &instance).context("bind component exports")?;
+        let visibility = match component.get_export_index(None, VISIBILITY_INTERFACE) {
+            Some(interface) => {
+                let function = component
+                    .get_export_index(Some(&interface), VISIBILITY_FUNCTION)
+                    .with_context(|| {
+                        format!("component {VISIBILITY_INTERFACE} lacks {VISIBILITY_FUNCTION}")
+                    })?;
+                Some(
+                    instance
+                        .get_typed_func(&mut store, function)
+                        .with_context(|| format!("bind component {VISIBILITY_FUNCTION}"))?,
+                )
+            }
+            None => None,
+        };
         Ok(Self {
             store,
             bindings,
+            visibility,
             limits,
             animations: AnimationRegistry::default(),
             effects: EffectRegistry::default(),
@@ -1305,6 +1327,28 @@ impl PluginHost {
             bail!("component requested a presentation from a presentation callback");
         }
         Ok(update)
+    }
+
+    /// Tells a component that its item came on the bar or left it, if it
+    /// exports the `visibility` callback. Returns whether the item must
+    /// render again.
+    pub fn handle_visibility_changed(&mut self, item_id: &str, visible: bool) -> Result<bool> {
+        let Some(function) = self.visibility else {
+            return Ok(false);
+        };
+        self.refuel()?;
+        self.store.data_mut().phase = Some(CallbackPhase::Lifecycle);
+        let result = function
+            .call(&mut self.store, (item_id.to_owned(), visible))
+            .context("component visibility call failed");
+        self.store.data_mut().phase = None;
+        let (update,) = result?;
+        let update =
+            update.map_err(|message| anyhow!("component rejected visibility change: {message}"))?;
+        if update.presentation.is_some() {
+            bail!("component requested a presentation outside a physical input callback");
+        }
+        Ok(update.rerender)
     }
 
     pub fn broker_generation(&self) -> Option<u64> {

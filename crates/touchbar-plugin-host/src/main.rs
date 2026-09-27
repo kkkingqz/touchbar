@@ -535,6 +535,8 @@ fn run_live(
             appearance: appearance_from_snapshot(AppearanceSnapshot::default()),
             width: 0,
             height: 0,
+            visible: true,
+            shown: false,
             max_frames,
             started: Instant::now(),
             next_presentation_session: 1,
@@ -580,6 +582,10 @@ struct ComponentApplication {
     appearance: Appearance,
     width: u32,
     height: u32,
+    /// What the compositor last said; a new surface is visible.
+    visible: bool,
+    /// What the component was last told.
+    shown: bool,
     max_frames: Option<u64>,
     started: Instant,
     next_presentation_session: u32,
@@ -604,6 +610,20 @@ impl ComponentApplication {
             self.started.elapsed(),
         )?);
         Ok(true)
+    }
+
+    /// Tells the component when its item comes on the bar, rendered and
+    /// visible, or leaves it. Returns whether it rendered again.
+    fn sync_shown(&mut self) -> Result<bool> {
+        let shown = self.visible && self.ui.is_some();
+        if shown == self.shown {
+            return Ok(false);
+        }
+        self.shown = shown;
+        if self.host.handle_visibility_changed(&self.item, shown)? {
+            return self.rebuild();
+        }
+        Ok(false)
     }
 
     fn send_ui_events(
@@ -747,6 +767,7 @@ impl Application for ComponentApplication {
         self.width = config.width;
         self.height = config.height;
         self.rebuild()?;
+        self.sync_shown()?;
         println!(
             "configured plugin=component item={} region={}x{} renderer={} transport=dmabuf runtime=component",
             self.item,
@@ -819,12 +840,14 @@ impl Application for ComponentApplication {
     }
 
     fn visibility_changed(&mut self, visible: bool) -> Result<bool> {
+        self.visible = visible;
+        let rebuilt = self.sync_shown()?;
         let Some(ui) = self.ui.as_mut() else {
             return Ok(false);
         };
         ui.set_visible(visible);
         println!("component-visibility item={} visible={visible}", self.item);
-        Ok(ui.needs_render())
+        Ok(rebuilt || ui.needs_render())
     }
 
     fn touch(&mut self, contact: TouchContact) -> Result<bool> {

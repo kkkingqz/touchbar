@@ -16,9 +16,29 @@ pub mod bindings {
     });
 }
 
+/// Bindings for the `visibility-aware-plugin` world, sharing the `ui` and
+/// `broker` types above. A component implements this module's `Guest`,
+/// which has the functions of `bindings::Guest`, and
+/// `exports::touchbar::plugin::visibility::Guest`, then exports itself with
+/// `export_visibility_aware!` instead of `export!`.
+pub mod visibility {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "visibility-aware-plugin",
+        with: {
+            "touchbar:plugin/ui@1.0.0": crate::bindings::touchbar::plugin::ui,
+            "touchbar:plugin/broker@1.0.0": crate::bindings::touchbar::plugin::broker,
+        },
+        pub_export_macro: true,
+        export_macro_name: "export_visibility_aware",
+        default_bindings_module: "touchbar_component_sdk::visibility",
+    });
+}
+
 pub mod kit;
 
 pub use bindings::*;
+pub use visibility::export_visibility_aware;
 
 use bindings::touchbar::plugin::broker;
 pub use touchbar_broker_schema::{
