@@ -12,11 +12,12 @@ pub use capability::{
     CapabilityStatus, ClipboardScope, CommandArgument, CommandRule, CommandRunScope,
     ContextReadScope, DbusArgumentConstraint, DbusBus, DbusCallRule, DbusCallScope, DbusSignalRule,
     DbusSubscribeScope, FileKind, FilesystemMountRequest, FilesystemReadScope,
-    FilesystemWriteScope, HttpMethod, HttpOriginRule, HttpRequestScope, LocalConnectScope,
-    LocalEndpointRequest, MediaControlAction, MediaControlScope, MediaReadScope,
-    NormalizationError, NotificationScope, NotificationUrgency, RiskClass, RuntimeKind,
-    SecretReadScope, SessionVariable, TrustSummary, UriOpenScope, WriteOperation,
-    normalize_manifest_permissions, summarize_trust, validate_capability_scope,
+    FilesystemWriteScope, HttpMethod, HttpOriginRule, HttpRequestScope, KeyboardShortcut,
+    KeyboardShortcutScope, LocalConnectScope, LocalEndpointRequest, MediaControlAction,
+    MediaControlScope, MediaReadScope, NormalizationError, NotificationScope, NotificationUrgency,
+    RiskClass, RuntimeKind, SecretReadScope, SessionVariable, ShortcutKey, TrustSummary,
+    UriOpenScope, WriteOperation, normalize_manifest_permissions, summarize_trust,
+    validate_capability_scope,
 };
 pub use grant::{
     ClipboardBinding, Decision, EffectiveGrant, EffectivePolicy, FilesystemMountBinding,

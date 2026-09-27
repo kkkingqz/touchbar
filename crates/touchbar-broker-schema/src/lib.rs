@@ -46,6 +46,9 @@ const MEDIA_READ_MAGIC: [u8; 8] = *b"OMMEDRQ1";
 const MEDIA_STATE_MAGIC: [u8; 8] = *b"OMMEDST1";
 const MEDIA_OPENED_MAGIC: [u8; 8] = *b"OMMEDOP1";
 const MEDIA_COMMAND_MAGIC: [u8; 8] = *b"OMMEDCM1";
+const SHORTCUT_REQUEST_MAGIC: [u8; 8] = *b"OMKEYRQ1";
+const SHORTCUT_DISPATCH_MAGIC: [u8; 8] = *b"OMKEYDS1";
+const SHORTCUT_OUTCOME_MAGIC: [u8; 8] = *b"OMKEYOC1";
 const HTTP_REQUEST_MAGIC: [u8; 8] = *b"OMHTTPQ1";
 const HTTP_RESPONSE_MAGIC: [u8; 8] = *b"OMHTTPR1";
 const HTTP_STREAM_OPENED_MAGIC: [u8; 8] = *b"OMHTTPO1";
@@ -344,6 +347,130 @@ fn decode_context_snapshot(
     }
     decoder.finish()?;
     Ok((resource_id, ContextSnapshot { generation, facts }))
+}
+
+/// Presses one shortcut of the component's `keyboard.shortcut.v1` grant, by
+/// its id. The grant fixes the keys and the applications.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KeyboardShortcutRequest {
+    pub shortcut: String,
+}
+
+impl KeyboardShortcutRequest {
+    pub fn encode(&self) -> Result<Vec<u8>, SchemaError> {
+        let mut encoder = Encoder::new(SHORTCUT_REQUEST_MAGIC);
+        encode_shortcut_id(&mut encoder, &self.shortcut)?;
+        encoder.finish()
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, SchemaError> {
+        let mut decoder = Decoder::new(bytes, SHORTCUT_REQUEST_MAGIC)?;
+        let shortcut = decode_shortcut_id(&mut decoder)?;
+        decoder.finish()?;
+        Ok(Self { shortcut })
+    }
+}
+
+/// A supervisor asks the session daemon, which knows the focused window and
+/// owns the input channel, to press one granted shortcut.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ShortcutDispatch {
+    pub request_id: u64,
+    pub shortcut: String,
+}
+
+impl ShortcutDispatch {
+    pub fn encode(&self) -> Result<Vec<u8>, SchemaError> {
+        let mut encoder = Encoder::new(SHORTCUT_DISPATCH_MAGIC);
+        encoder.u64(self.request_id);
+        encode_shortcut_id(&mut encoder, &self.shortcut)?;
+        encoder.finish()
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, SchemaError> {
+        let mut decoder = Decoder::new(bytes, SHORTCUT_DISPATCH_MAGIC)?;
+        let request_id = decoder.u64()?;
+        let shortcut = decode_shortcut_id(&mut decoder)?;
+        decoder.finish()?;
+        Ok(Self {
+            request_id,
+            shortcut,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShortcutResult {
+    Pressed,
+    /// None of the shortcut's applications has the keyboard focus.
+    NotFocused,
+    /// The grant does not contain the shortcut (any more).
+    NotGranted,
+    /// The desktop offers no way to press keys, or the user declined it.
+    Unavailable,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ShortcutOutcome {
+    pub request_id: u64,
+    pub result: ShortcutResult,
+}
+
+impl ShortcutOutcome {
+    pub fn encode(&self) -> Result<Vec<u8>, SchemaError> {
+        let mut encoder = Encoder::new(SHORTCUT_OUTCOME_MAGIC);
+        encoder.u64(self.request_id);
+        encoder.byte(match self.result {
+            ShortcutResult::Pressed => 0,
+            ShortcutResult::NotFocused => 1,
+            ShortcutResult::NotGranted => 2,
+            ShortcutResult::Unavailable => 3,
+            ShortcutResult::Failed => 4,
+        });
+        encoder.finish()
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, SchemaError> {
+        let mut decoder = Decoder::new(bytes, SHORTCUT_OUTCOME_MAGIC)?;
+        let request_id = decoder.u64()?;
+        let result = match decoder.byte()? {
+            0 => ShortcutResult::Pressed,
+            1 => ShortcutResult::NotFocused,
+            2 => ShortcutResult::NotGranted,
+            3 => ShortcutResult::Unavailable,
+            4 => ShortcutResult::Failed,
+            _ => return Err(SchemaError::Malformed),
+        };
+        decoder.finish()?;
+        Ok(Self { request_id, result })
+    }
+}
+
+/// Shortcut ids are the grant's kebab-case ids.
+const MAX_SHORTCUT_ID_BYTES: usize = 64;
+
+fn valid_shortcut_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_SHORTCUT_ID_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn encode_shortcut_id(encoder: &mut Encoder, value: &str) -> Result<(), SchemaError> {
+    if !valid_shortcut_id(value) {
+        return Err(SchemaError::Malformed);
+    }
+    encoder.string(value)
+}
+
+fn decode_shortcut_id(decoder: &mut Decoder<'_>) -> Result<String, SchemaError> {
+    let value = decoder.string()?;
+    if !valid_shortcut_id(&value) {
+        return Err(SchemaError::Malformed);
+    }
+    Ok(value)
 }
 
 /// Opens the now-playing subscription of `media.read.v1`. It has no options
@@ -2657,6 +2784,51 @@ impl<'a> Decoder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyboard_shortcut_payloads_round_trip_and_reject_odd_ids() {
+        let request = KeyboardShortcutRequest {
+            shortcut: "back".into(),
+        };
+        assert_eq!(
+            KeyboardShortcutRequest::decode(&request.encode().unwrap()).unwrap(),
+            request
+        );
+        let dispatch = ShortcutDispatch {
+            request_id: 7,
+            shortcut: "bold".into(),
+        };
+        assert_eq!(
+            ShortcutDispatch::decode(&dispatch.encode().unwrap()).unwrap(),
+            dispatch
+        );
+        for result in [
+            ShortcutResult::Pressed,
+            ShortcutResult::NotFocused,
+            ShortcutResult::NotGranted,
+            ShortcutResult::Unavailable,
+            ShortcutResult::Failed,
+        ] {
+            let outcome = ShortcutOutcome {
+                request_id: 9,
+                result,
+            };
+            assert_eq!(
+                ShortcutOutcome::decode(&outcome.encode().unwrap()).unwrap(),
+                outcome
+            );
+        }
+        for shortcut in ["", "Back", "back back", &"a".repeat(65)] {
+            assert!(
+                KeyboardShortcutRequest {
+                    shortcut: shortcut.into()
+                }
+                .encode()
+                .is_err()
+            );
+        }
+        assert!(KeyboardShortcutRequest::decode(&dispatch.encode().unwrap()).is_err());
+    }
 
     fn exercise_all_decoders(bytes: &[u8]) {
         let _ = ContextReadRequest::decode(bytes);

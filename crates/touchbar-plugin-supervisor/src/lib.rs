@@ -19,6 +19,7 @@ mod filesystem;
 mod filesystem_write;
 mod health;
 mod http;
+mod keyboard;
 mod lifecycle;
 mod local;
 mod media;
@@ -93,6 +94,7 @@ pub use http::{
     HttpStreamCallbacks, HttpTransport, HttpTransportResponse, ReqwestHttpTransport,
     SystemHttpResolver,
 };
+pub use keyboard::{KEYBOARD_SHORTCUT_OPERATION, KeyboardShortcutBackend};
 pub use lifecycle::{
     BrokerResource, LifecycleLimits, LifecycleState, PendingOperation, RevocationEffect,
 };

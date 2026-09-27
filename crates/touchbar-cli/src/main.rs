@@ -1982,10 +1982,12 @@ fn plan_install(
                 && grant.allows()
                 && grant.bindings == bindings
         });
+        let mut resources = binding_resources(&bindings);
+        resources.extend(scope_details(&request.scope));
         permissions.push(PermissionReview {
             capability: request.capability.clone(),
             reason: request.reason.clone(),
-            resources: binding_resources(&bindings),
+            resources,
             reused,
         });
         if !reused {
@@ -2165,6 +2167,38 @@ fn requested_filesystem_mounts(request: &CapabilityRequest) -> Vec<(String, Opti
     mounts.into_iter().collect()
 }
 
+/// What a scope lets a plugin do, where a title alone would hide it: every
+/// keyboard shortcut, with the applications it may be pressed in.
+fn scope_details(scope: &CapabilityScope) -> Vec<String> {
+    match scope {
+        CapabilityScope::KeyboardShortcut(scope) => scope
+            .shortcuts
+            .iter()
+            .map(|shortcut| {
+                let keys = shortcut
+                    .keys
+                    .iter()
+                    .map(|key| {
+                        serde_json::to_value(key)
+                            .ok()
+                            .and_then(|value| value.as_str().map(str::to_owned))
+                            .unwrap_or_default()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("+");
+                let applications = shortcut
+                    .applications
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}: {keys} in {applications}", shortcut.id)
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 fn binding_resources(bindings: &GrantBindings) -> Vec<String> {
     let mut resources = bindings
         .filesystem_mounts
@@ -2341,6 +2375,7 @@ fn capability_title(capability: &CapabilityId) -> &'static str {
         CapabilityId::AppearanceProvideV1 => "Provide the Touch Bar appearance",
         CapabilityId::MediaReadV1 => "See what media is playing",
         CapabilityId::MediaControlV1 => "Control media playback",
+        CapabilityId::KeyboardShortcutV1 => "Press keyboard shortcuts in specific applications",
         CapabilityId::Unknown(_) => "Request unsupported host access",
     }
 }

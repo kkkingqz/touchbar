@@ -30,6 +30,7 @@ members = [
     "examples/http-component-plugin",
     "examples/secret-component-plugin",
     "plugins/controls",
+    "plugins/app-actions",
     "plugins/media",
     "plugins/hyprland",
     "plugins/capture",

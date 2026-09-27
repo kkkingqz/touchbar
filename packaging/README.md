@@ -133,6 +133,22 @@ stands aside outside its desktop, and the media source.
   ] }
   ```
 
+## Application shortcuts
+
+Plugins granted `keyboard.shortcut.v1` press fixed shortcuts, such as
+alt+left in a browser, only in the applications their grant names and only
+while one of them has the focus. Wayland lets no ordinary client type into
+another application, so the session daemon presses them through the desktop's
+RemoteDesktop portal (`xdg-desktop-portal` with a backend that implements it,
+such as GNOME's). The first press asks once whether TouchBar may control the
+keyboard; the portal's restore token, kept in
+`$XDG_DATA_HOME/touchbar/remote-desktop.token`, keeps that approval. Revoke it
+in the desktop's privacy settings or by deleting the file. The portal session
+closes after 20 seconds without a press, so GNOME's remote-control indicator
+shows only while shortcuts are in use. A refusal is not asked again for ten
+minutes. Without the portal, shortcuts are unavailable and nothing else
+changes.
+
 The user compositor is enabled under `graphical-session.target`, not the
 longer-lived user `default.target`; logout tears it down and a subsequent
 graphical login starts it again without relying on compatibility aliases or a

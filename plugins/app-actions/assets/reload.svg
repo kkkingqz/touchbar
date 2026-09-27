@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- Alpha mask: the host tints it with a theme color. -->
+  <path fill="#fff" d="M12 4a8 8 0 0 1 7.4 5H21V3.5l-2.1 2.1A10 10 0 1 0 22 12h-2a8 8 0 1 1-8-8z"/>
+  <path fill="#fff" d="M21 3v6h-6z"/>
+</svg>

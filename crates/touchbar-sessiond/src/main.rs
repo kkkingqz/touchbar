@@ -53,6 +53,7 @@ mod context;
 mod frame_output;
 mod gpu;
 mod input;
+mod keyboard;
 mod live_profiles;
 mod media_context;
 mod plugins;
@@ -62,6 +63,8 @@ mod preview_output;
 mod profile_watch;
 mod status_scene;
 mod system_scene;
+#[cfg(test)]
+mod test_bus;
 mod wake;
 
 use appearance::AppearanceSource;
@@ -71,6 +74,7 @@ use context::{
 use frame_output::FramePublisher;
 use gpu::{CompletionFence, GpuCompositor, LayerGeometry};
 use input::{Contact as GlobalContact, Phase as ContactPhase, Router as InputRouter};
+use keyboard::{FocusedApplication, RemoteDesktopPortal, ShortcutPresser};
 use live_profiles::LiveProfiles;
 use media_context::MediaContextSource;
 use power::{PowerSource, PowerState};
@@ -573,6 +577,8 @@ struct State {
     packaged_profiles: plugins::PackagedProfileCatalog,
     profile_layouts: u64,
     context_changes: u64,
+    /// `application.id`, for pressing shortcuts only in their applications.
+    focused_application: FocusedApplication,
     theme_change_activity_until: Option<Instant>,
     next_layer_id: u64,
     next_configure_serial: u32,
@@ -671,6 +677,7 @@ impl State {
             packaged_profiles: plugins::PackagedProfileCatalog::default(),
             profile_layouts: 0,
             context_changes: 0,
+            focused_application: FocusedApplication::default(),
             theme_change_activity_until: None,
             next_layer_id: 1,
             next_configure_serial: 1,
@@ -2313,6 +2320,12 @@ impl State {
 
     fn handle_context_event(&mut self, event: ContextEvent) -> Result<()> {
         self.context_changes += 1;
+        if event.key == context::APPLICATION_ID {
+            self.focused_application.set(match &event.value {
+                ContextValue::Text(application) => Some(application.clone()),
+                _ => None,
+            });
+        }
         println!("context-event key={} value={:?}", event.key, event.value);
         let snapshot = self
             .live_profiles
@@ -2337,6 +2350,9 @@ impl State {
 
     fn clear_context_fact(&mut self, key: &str) -> Result<()> {
         self.context_changes += 1;
+        if key == context::APPLICATION_ID {
+            self.focused_application.set(None);
+        }
         println!("context-event key={key} cleared=true");
         let Some(profiles) = self.live_profiles.as_mut() else {
             return Ok(());
@@ -4355,6 +4371,7 @@ fn main() -> Result<()> {
         .with_context(|| format!("bind Wayland socket {}", args.socket))?;
     // Supervisors exist only with plugins, and follow the record then.
     let media_record = args.plugins.then(|| plugin_paths.media_session.clone());
+    let shortcut_token = plugin_paths.root.join("remote-desktop.token");
     let control_path = args
         .control_socket
         .clone()
@@ -4388,6 +4405,17 @@ fn main() -> Result<()> {
             .and_then(plugins::PluginManager::appearance_provider),
         args.system_bar,
     )?;
+    // Shortcut presses from component supervisors, through the desktop's
+    // RemoteDesktop portal.
+    let shortcut_presser = plugin_manager
+        .as_ref()
+        .map(|_| {
+            ShortcutPresser::start(
+                state.focused_application.clone(),
+                RemoteDesktopPortal::new(shortcut_token),
+            )
+        })
+        .transpose()?;
     if let Some(manager) = &plugin_manager {
         state.set_presentation_catalog(manager.presentation_catalog().clone());
         state.set_packaged_profile_catalog(manager.profile_catalog().clone())?;
@@ -4543,6 +4571,11 @@ fn main() -> Result<()> {
         if let Some(manager) = &mut plugin_manager {
             for publication in manager.poll() {
                 state.publish_appearance_provider(publication)?;
+            }
+            for job in manager.poll_shortcuts() {
+                if let Some(presser) = &shortcut_presser {
+                    presser.submit(job);
+                }
             }
         }
         while let Some(stream) = listener.accept().context("accept Wayland client")? {
@@ -4789,6 +4822,7 @@ fn main() -> Result<()> {
         }
         if let Some(manager) = &plugin_manager {
             wait_fds.extend(manager.appearance_notification_fds());
+            wait_fds.extend(manager.shortcut_notification_fds());
         }
         wait_for_work(wait_fds, wait_delay).context("wait for session work")?;
     }

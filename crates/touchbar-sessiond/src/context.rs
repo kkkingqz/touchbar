@@ -28,7 +28,7 @@ use zbus::{
 use crate::wake::EventSignal;
 
 const MAX_TRACKED_ACTIVITIES: usize = 128;
-const APPLICATION_ID: &str = "application.id";
+pub(crate) const APPLICATION_ID: &str = "application.id";
 
 /// The GNOME Shell extension the GNOME source depends on:
 /// https://extensions.gnome.org/extension/8549/window-monitor-pro/

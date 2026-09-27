@@ -43,6 +43,8 @@ pub enum CapabilityId {
     MediaReadV1,
     #[serde(rename = "media.control.v1")]
     MediaControlV1,
+    #[serde(rename = "keyboard.shortcut.v1")]
+    KeyboardShortcutV1,
     #[serde(untagged)]
     Unknown(String),
 }
@@ -78,6 +80,7 @@ impl CapabilityRegistry {
                 CapabilityId::AppearanceProvideV1,
                 CapabilityId::MediaReadV1,
                 CapabilityId::MediaControlV1,
+                CapabilityId::KeyboardShortcutV1,
             ]),
         }
     }
@@ -129,6 +132,7 @@ impl fmt::Display for CapabilityId {
             Self::AppearanceProvideV1 => "appearance.provide.v1",
             Self::MediaReadV1 => "media.read.v1",
             Self::MediaControlV1 => "media.control.v1",
+            Self::KeyboardShortcutV1 => "keyboard.shortcut.v1",
             Self::Unknown(value) => value,
         })
     }
@@ -155,6 +159,7 @@ impl FromStr for CapabilityId {
             "appearance.provide.v1" => Self::AppearanceProvideV1,
             "media.read.v1" => Self::MediaReadV1,
             "media.control.v1" => Self::MediaControlV1,
+            "keyboard.shortcut.v1" => Self::KeyboardShortcutV1,
             _ if valid_dotted_id(value) => Self::Unknown(value.into()),
             _ => return Err("capability must be a lowercase dotted identifier".into()),
         };
@@ -225,6 +230,7 @@ pub enum CapabilityScope {
     AppearanceProvide(AppearanceProvideScope),
     MediaRead(MediaReadScope),
     MediaControl(MediaControlScope),
+    KeyboardShortcut(KeyboardShortcutScope),
     Unknown(String),
 }
 
@@ -646,6 +652,209 @@ pub enum MediaControlAction {
     Seek,
 }
 
+/// One key of a keyboard shortcut, named by its position on a US layout, as
+/// evdev keycodes are: shortcuts follow the physical key whatever the
+/// layout, as applications resolve them.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShortcutKey {
+    Ctrl,
+    Shift,
+    Alt,
+    Super,
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
+    Digit0,
+    Digit1,
+    Digit2,
+    Digit3,
+    Digit4,
+    Digit5,
+    Digit6,
+    Digit7,
+    Digit8,
+    Digit9,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+    Escape,
+    Tab,
+    Enter,
+    Space,
+    Backspace,
+    Delete,
+    Insert,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Up,
+    Down,
+    Left,
+    Right,
+    Minus,
+    Equal,
+    BracketLeft,
+    BracketRight,
+    Semicolon,
+    Apostrophe,
+    Grave,
+    Backslash,
+    Comma,
+    Period,
+    Slash,
+}
+
+impl ShortcutKey {
+    pub fn is_modifier(self) -> bool {
+        matches!(self, Self::Ctrl | Self::Shift | Self::Alt | Self::Super)
+    }
+
+    /// The Linux input event code of this key (`KEY_*`).
+    pub fn evdev_code(self) -> u16 {
+        match self {
+            Self::Ctrl => 29,
+            Self::Shift => 42,
+            Self::Alt => 56,
+            Self::Super => 125,
+            Self::A => 30,
+            Self::B => 48,
+            Self::C => 46,
+            Self::D => 32,
+            Self::E => 18,
+            Self::F => 33,
+            Self::G => 34,
+            Self::H => 35,
+            Self::I => 23,
+            Self::J => 36,
+            Self::K => 37,
+            Self::L => 38,
+            Self::M => 50,
+            Self::N => 49,
+            Self::O => 24,
+            Self::P => 25,
+            Self::Q => 16,
+            Self::R => 19,
+            Self::S => 31,
+            Self::T => 20,
+            Self::U => 22,
+            Self::V => 47,
+            Self::W => 17,
+            Self::X => 45,
+            Self::Y => 21,
+            Self::Z => 44,
+            Self::Digit0 => 11,
+            Self::Digit1 => 2,
+            Self::Digit2 => 3,
+            Self::Digit3 => 4,
+            Self::Digit4 => 5,
+            Self::Digit5 => 6,
+            Self::Digit6 => 7,
+            Self::Digit7 => 8,
+            Self::Digit8 => 9,
+            Self::Digit9 => 10,
+            Self::F1 => 59,
+            Self::F2 => 60,
+            Self::F3 => 61,
+            Self::F4 => 62,
+            Self::F5 => 63,
+            Self::F6 => 64,
+            Self::F7 => 65,
+            Self::F8 => 66,
+            Self::F9 => 67,
+            Self::F10 => 68,
+            Self::F11 => 87,
+            Self::F12 => 88,
+            Self::Escape => 1,
+            Self::Tab => 15,
+            Self::Enter => 28,
+            Self::Space => 57,
+            Self::Backspace => 14,
+            Self::Delete => 111,
+            Self::Insert => 110,
+            Self::Home => 102,
+            Self::End => 107,
+            Self::PageUp => 104,
+            Self::PageDown => 109,
+            Self::Up => 103,
+            Self::Down => 108,
+            Self::Left => 105,
+            Self::Right => 106,
+            Self::Minus => 12,
+            Self::Equal => 13,
+            Self::BracketLeft => 26,
+            Self::BracketRight => 27,
+            Self::Semicolon => 39,
+            Self::Apostrophe => 40,
+            Self::Grave => 41,
+            Self::Backslash => 43,
+            Self::Comma => 51,
+            Self::Period => 52,
+            Self::Slash => 53,
+        }
+    }
+}
+
+/// One fixed chord a component may press, and the applications it may be
+/// pressed in. Modifiers first, then exactly one other key.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeyboardShortcut {
+    pub id: String,
+    pub keys: Vec<ShortcutKey>,
+    /// `application.id` values, as the session's context source reports
+    /// the focused window.
+    pub applications: BTreeSet<String>,
+}
+
+/// Authority to press fixed shortcuts in named applications while one of
+/// them has the keyboard focus. Arbitrary text can never be typed, and
+/// every press needs a fresh touch on the component's own control.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct KeyboardShortcutScope {
+    pub shortcuts: BTreeSet<KeyboardShortcut>,
+}
+
+impl KeyboardShortcutScope {
+    pub fn shortcut(&self, id: &str) -> Option<&KeyboardShortcut> {
+        self.shortcuts.iter().find(|shortcut| shortcut.id == id)
+    }
+}
+
 /// Authority to control the now-playing media session. Every command also
 /// needs a fresh touch on the component's own control.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -833,6 +1042,10 @@ fn normalize_permission(
         }
         CapabilityId::MediaControlV1 => {
             decode_scope::<MediaControlScope>(permission, &field).map(CapabilityScope::MediaControl)
+        }
+        CapabilityId::KeyboardShortcutV1 => {
+            decode_scope::<KeyboardShortcutScope>(permission, &field)
+                .map(CapabilityScope::KeyboardShortcut)
         }
         CapabilityId::Unknown(_) => Ok(CapabilityScope::Unknown(encoded_scope)),
     }
@@ -1247,6 +1460,42 @@ fn validate_scope(
         CapabilityScope::MediaControl(value) => {
             require_nonempty(&value.actions, "actions", &mut issue);
         }
+        CapabilityScope::KeyboardShortcut(value) => {
+            require_nonempty(&value.shortcuts, "shortcuts", &mut issue);
+            require_collection_limit(value.shortcuts.len(), 32, "shortcuts", &mut issue);
+            let mut ids = BTreeSet::new();
+            for shortcut in &value.shortcuts {
+                if !valid_kebab_id(&shortcut.id) || !ids.insert(shortcut.id.as_str()) {
+                    issue(format!("invalid or duplicate shortcut id {}", shortcut.id));
+                }
+                let (modifiers, keys) = shortcut
+                    .keys
+                    .split_at(shortcut.keys.len().saturating_sub(1));
+                let unique = shortcut.keys.iter().collect::<BTreeSet<_>>().len();
+                if keys.len() != 1
+                    || keys[0].is_modifier()
+                    || !modifiers.iter().all(|key| key.is_modifier())
+                    || unique != shortcut.keys.len()
+                {
+                    issue(format!(
+                        "shortcut {} must be distinct modifiers then one other key",
+                        shortcut.id
+                    ));
+                }
+                require_nonempty(&shortcut.applications, "shortcut applications", &mut issue);
+                require_collection_limit(
+                    shortcut.applications.len(),
+                    16,
+                    "shortcut applications",
+                    &mut issue,
+                );
+                for application in &shortcut.applications {
+                    if !valid_application_id(application) {
+                        issue(format!("invalid application {application}"));
+                    }
+                }
+            }
+        }
         CapabilityScope::Unknown(_) => {}
     }
     if !scope.matches_capability(capability) {
@@ -1299,6 +1548,7 @@ impl CapabilityScope {
                 )
                 | (CapabilityId::MediaReadV1, Self::MediaRead(_))
                 | (CapabilityId::MediaControlV1, Self::MediaControl(_))
+                | (CapabilityId::KeyboardShortcutV1, Self::KeyboardShortcut(_))
                 | (CapabilityId::Unknown(_), Self::Unknown(_))
         )
     }
@@ -1380,6 +1630,13 @@ impl CapabilityScope {
             (Self::MediaControl(new), Self::MediaControl(old)) => {
                 new.actions.is_subset(&old.actions)
             }
+            (Self::KeyboardShortcut(new), Self::KeyboardShortcut(old)) => {
+                new.shortcuts.iter().all(|new| {
+                    old.shortcut(&new.id).is_some_and(|old| {
+                        new.keys == old.keys && new.applications.is_subset(&old.applications)
+                    })
+                })
+            }
             (Self::Unknown(new), Self::Unknown(old)) => new == old,
             _ => false,
         }
@@ -1405,9 +1662,9 @@ impl CapabilityScope {
             | CapabilityId::ClipboardWriteV1
             | CapabilityId::NotificationSendV1
             | CapabilityId::UriOpenV1 => RiskClass::Controlling,
-            CapabilityId::AppearanceProvideV1 | CapabilityId::MediaControlV1 => {
-                RiskClass::Controlling
-            }
+            CapabilityId::AppearanceProvideV1
+            | CapabilityId::MediaControlV1
+            | CapabilityId::KeyboardShortcutV1 => RiskClass::Controlling,
             CapabilityId::CommandRunV1 => match self {
                 Self::CommandRun(scope) if scope.commands.iter().any(command_is_interpreter) => {
                     RiskClass::EffectivelyTrusted
@@ -1883,6 +2140,16 @@ fn valid_kebab_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+/// An `application.id` as the context sources report it: a window class,
+/// trimmed and lowercased, such as `firefox_firefox` or `org.gnome.ptyxis`.
+fn valid_application_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._-".contains(&byte)
+        })
 }
 
 fn valid_dotted_id(value: &str) -> bool {

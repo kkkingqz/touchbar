@@ -8,6 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use touchbar_broker_schema::AppearancePublish;
+use touchbar_broker_schema::{ShortcutDispatch, ShortcutOutcome, ShortcutResult};
 use touchbar_control::ProcessStatus;
 use touchbar_package::{
     AppearanceProvider, AutomaticProfile, GithubSource, PluginManifest, PresentationBar,
@@ -18,7 +19,7 @@ use touchbar_plugin_store::{
 };
 use touchbar_policy::{
     CapabilityId, CapabilityRegistry, CapabilityRequest, CapabilityScope, EffectivePolicy,
-    GrantStore, PackageInstance, Provenance, RuntimeKind, SessionGrants,
+    GrantStore, KeyboardShortcut, PackageInstance, Provenance, RuntimeKind, SessionGrants,
     calculate_effective_policy,
 };
 use touchbar_profile_config::{
@@ -28,7 +29,7 @@ use touchbar_profile_config::{
 };
 use touchbar_protocol::broker_ipc::Seqpacket;
 
-use crate::appearance::ProviderIdentity;
+use crate::{appearance::ProviderIdentity, keyboard::ShortcutJob};
 
 const MAX_AUTOMATIC_RESTARTS: u32 = 8;
 const CHILD_STATUS_INTERVAL: Duration = Duration::from_millis(250);
@@ -36,6 +37,9 @@ const POLICY_STATUS_INTERVAL: Duration = Duration::from_millis(250);
 const APPEARANCE_SINK_FD: i32 = 7;
 const APPEARANCE_SINK_FD_ENV: &str = "TOUCHBAR_APPEARANCE_SINK_FD";
 const APPEARANCE_PROCESS_PREFIX: &str = "appearance-provider:";
+/// Each component supervisor's private channel for `keyboard.shortcut.v1`.
+const SHORTCUT_FD: i32 = 8;
+const SHORTCUT_FD_ENV: &str = "TOUCHBAR_SHORTCUT_FD";
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct Key {
@@ -123,12 +127,14 @@ struct Managed {
     stopped: bool,
     permission_blocked: bool,
     appearance_channel: Option<Seqpacket>,
+    shortcut_channel: Option<Seqpacket>,
 }
 
 impl Managed {
     fn record_failure(&mut self, detail: String, now: Instant) {
         self.child = None;
         self.appearance_channel = None;
+        self.shortcut_channel = None;
         self.restarts = self.restarts.saturating_add(1);
         self.detail = Some(detail);
         self.stopped = self.restarts >= MAX_AUTOMATIC_RESTARTS;
@@ -659,6 +665,7 @@ impl PluginManager {
                 stopped: false,
                 permission_blocked: false,
                 appearance_channel: None,
+                shortcut_channel: None,
             };
             start(
                 &self.supervisor,
@@ -796,6 +803,67 @@ impl PluginManager {
         self.appearance_providers.active()
     }
 
+    /// Presses the component supervisors asked for. Each is looked up in
+    /// the component's current grant, so the keys and applications are the
+    /// user's approval, not the supervisor's word; a shortcut not granted
+    /// is answered at once.
+    pub fn poll_shortcuts(&mut self) -> Vec<ShortcutJob> {
+        let mut jobs = Vec::new();
+        let mut grants = None;
+        for process in self.processes.values_mut() {
+            let Some(channel) = &process.shortcut_channel else {
+                continue;
+            };
+            for _ in 0..8 {
+                let Ok(Some(payload)) = channel.try_recv_payload() else {
+                    break;
+                };
+                let Ok(dispatch) = ShortcutDispatch::decode(&payload) else {
+                    process.detail = Some("supervisor sent a malformed shortcut".into());
+                    continue;
+                };
+                let (grants, session) = grants.get_or_insert_with(|| {
+                    let grants = GrantStore::load(&self.paths.grants).unwrap_or_default();
+                    let session = GrantStore::load(&self.paths.session_grants)
+                        .ok()
+                        .and_then(|store| SessionGrants::from_records(store.records()).ok())
+                        .unwrap_or_default();
+                    (grants, session)
+                });
+                let shortcut = process.desired.policy.as_ref().and_then(|policy| {
+                    granted_shortcut(policy, grants, session, &dispatch.shortcut)
+                });
+                let Ok(reply) = channel.try_clone() else {
+                    continue;
+                };
+                match shortcut {
+                    Some(shortcut) => jobs.push(ShortcutJob {
+                        request_id: dispatch.request_id,
+                        shortcut,
+                        reply,
+                    }),
+                    None => {
+                        let outcome = ShortcutOutcome {
+                            request_id: dispatch.request_id,
+                            result: ShortcutResult::NotGranted,
+                        };
+                        if let Ok(payload) = outcome.encode() {
+                            let _ = reply.send_payload(&payload);
+                        }
+                    }
+                }
+            }
+        }
+        jobs
+    }
+
+    pub fn shortcut_notification_fds(&self) -> Vec<i32> {
+        self.processes
+            .values()
+            .filter_map(|process| process.shortcut_channel.as_ref().map(AsRawFd::as_raw_fd))
+            .collect()
+    }
+
     pub fn appearance_notification_fds(&self) -> Vec<i32> {
         self.processes
             .values()
@@ -831,6 +899,31 @@ impl PluginManager {
         }
         self.next_policy_refresh = Instant::now() + POLICY_STATUS_INTERVAL;
     }
+}
+
+/// The granted shortcut with this id, if the component may press it now.
+fn granted_shortcut(
+    policy: &PolicyInput,
+    grants: &GrantStore,
+    session: &SessionGrants,
+    id: &str,
+) -> Option<KeyboardShortcut> {
+    let effective = calculate_effective_policy(
+        &policy.package,
+        &policy.requests,
+        grants,
+        session,
+        &CapabilityRegistry::default(),
+    );
+    effective
+        .grants
+        .iter()
+        .filter(|grant| grant.request.capability == CapabilityId::KeyboardShortcutV1)
+        .filter(|grant| grant.allows())
+        .find_map(|grant| match grant.approved_scope.as_ref()? {
+            CapabilityScope::KeyboardShortcut(scope) => scope.shortcut(id).cloned(),
+            _ => None,
+        })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1053,7 +1146,9 @@ fn desired_state(
 }
 
 fn start(supervisor: &Path, host: &Path, paths: &StorePaths, display: &str, process: &mut Managed) {
-    let result: Result<(Child, Option<Seqpacket>)> = (|| match &process.desired.launch {
+    // The child, and the sessiond ends of its appearance and shortcut channels.
+    type Launched = (Child, Option<Seqpacket>, Option<Seqpacket>);
+    let result: Result<Launched> = (|| match &process.desired.launch {
         Launch::Component {
             digest,
             asset_digests,
@@ -1098,10 +1193,26 @@ fn start(supervisor: &Path, host: &Path, paths: &StorePaths, display: &str, proc
                     &process.desired.width.to_string(),
                 ])
                 .env("WAYLAND_DISPLAY", display)
-                .stdin(Stdio::null())
-                .spawn()
-                .map(|child| (child, None))
-                .map_err(Into::into)
+                .env(SHORTCUT_FD_ENV, SHORTCUT_FD.to_string())
+                .stdin(Stdio::null());
+            let (session_channel, supervisor_channel) = Seqpacket::pair()?;
+            let source = supervisor_channel.as_raw_fd();
+            // SAFETY: the closure performs only descriptor duplication before
+            // exec of the trusted supervisor.
+            unsafe {
+                command.pre_exec(move || {
+                    if source != SHORTCUT_FD && libc::dup2(source, SHORTCUT_FD) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::fcntl(SHORTCUT_FD, libc::F_SETFD, 0) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let child = command.spawn()?;
+            drop(supervisor_channel);
+            Ok((child, None, Some(session_channel)))
         }
         Launch::TrustedComponent => Command::new(host)
             .arg(&process.desired.package)
@@ -1115,7 +1226,7 @@ fn start(supervisor: &Path, host: &Path, paths: &StorePaths, display: &str, proc
             .env("WAYLAND_DISPLAY", display)
             .stdin(Stdio::null())
             .spawn()
-            .map(|child| (child, None))
+            .map(|child| (child, None, None))
             .map_err(Into::into),
         Launch::AppearanceProvider {
             identity,
@@ -1168,7 +1279,7 @@ fn start(supervisor: &Path, host: &Path, paths: &StorePaths, display: &str, proc
             }
             let child = command.spawn()?;
             drop(supervisor_channel);
-            Ok((child, Some(session_channel)))
+            Ok((child, Some(session_channel), None))
         }
         Launch::Native { executable } => Command::new(executable)
             .args([
@@ -1181,13 +1292,14 @@ fn start(supervisor: &Path, host: &Path, paths: &StorePaths, display: &str, proc
             .env("WAYLAND_DISPLAY", display)
             .stdin(Stdio::null())
             .spawn()
-            .map(|child| (child, None))
+            .map(|child| (child, None, None))
             .map_err(Into::into),
     })();
     match result {
-        Ok((child, appearance_channel)) => {
+        Ok((child, appearance_channel, shortcut_channel)) => {
             process.child = Some(child);
             process.appearance_channel = appearance_channel;
+            process.shortcut_channel = shortcut_channel;
             process.detail = None;
         }
         Err(error) => {
@@ -1269,6 +1381,7 @@ mod tests {
             stopped: false,
             permission_blocked: false,
             appearance_channel: None,
+            shortcut_channel: None,
         }
     }
 
@@ -1444,6 +1557,66 @@ activities = ["theme-change"]
         let document = catalog.merge(None).unwrap().unwrap();
         assert_eq!(document.contributions[0].items[0].item, "palette");
         assert_eq!(document.contributions[1].items[0].item, "screensaver");
+    }
+
+    #[test]
+    fn a_shortcut_is_pressed_only_as_the_current_grant_defines_it() {
+        let manifest = PluginManifest::from_toml(include_str!(
+            "../../../plugins/app-actions/touchbar-plugin.toml"
+        ))
+        .unwrap();
+        let requests = CapabilityRegistry::default().normalize(&manifest).unwrap();
+        let policy = PolicyInput {
+            package: PackageInstance {
+                source: manifest.plugin.source.clone(),
+                version: manifest.plugin.version.clone(),
+                digest: format!("sha256:{}", "a".repeat(64)),
+                provenance: Provenance::LocalDevelopment,
+                runtime: RuntimeKind::Component,
+            },
+            requests: requests.clone(),
+        };
+        let session = SessionGrants::default();
+        assert_eq!(
+            granted_shortcut(&policy, &GrantStore::default(), &session, "back"),
+            None,
+            "nothing is pressed before the user approves"
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let grants_path = root.path().join("permissions.toml");
+        for request in &requests {
+            GrantStore::update_record(
+                &grants_path,
+                GrantRecord {
+                    source: policy.package.source.clone(),
+                    capability: request.capability.clone(),
+                    approved_scope: request.scope.clone(),
+                    bindings: GrantBindings::default(),
+                    decision: Decision::Allow,
+                    reuse: ReusePolicy::ExactDigest,
+                    approved_version: policy.package.version.clone(),
+                    approved_digest: policy.package.digest.clone(),
+                },
+            )
+            .unwrap();
+        }
+        let grants = GrantStore::load(&grants_path).unwrap();
+        let back = granted_shortcut(&policy, &grants, &session, "back").unwrap();
+        assert_eq!(
+            back.keys,
+            [
+                touchbar_policy::ShortcutKey::Alt,
+                touchbar_policy::ShortcutKey::Left
+            ]
+        );
+        assert!(back.applications.contains("firefox_firefox"));
+        assert_eq!(
+            granted_shortcut(&policy, &grants, &session, "close-tab"),
+            None,
+            "a supervisor cannot name a shortcut the user never saw"
+        );
     }
 
     #[test]

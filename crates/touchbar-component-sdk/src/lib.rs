@@ -31,9 +31,9 @@ pub use touchbar_broker_schema::{
     FilesystemReadStream, FilesystemRename, FilesystemStreamEvent, FilesystemStreamOpened,
     FilesystemWriteFile, FilesystemWriteStream, FilesystemWriteStreamChunk,
     FilesystemWriteStreamCommit, FilesystemWriteStreamOpened, HttpRequest, HttpRequestMethod,
-    HttpResponse, HttpStreamEvent, HttpStreamOpened, LocalConnect, LocalConnectionOpened,
-    LocalFrameEvent, LocalSendFrame, MAX_CLIPBOARD_BYTES, MAX_CLIPBOARD_MIME_BYTES,
-    MAX_DIRECTORY_ENTRIES, MAX_FILE_CHUNK_BYTES, MAX_FILE_STREAM_BYTES,
+    HttpResponse, HttpStreamEvent, HttpStreamOpened, KeyboardShortcutRequest, LocalConnect,
+    LocalConnectionOpened, LocalFrameEvent, LocalSendFrame, MAX_CLIPBOARD_BYTES,
+    MAX_CLIPBOARD_MIME_BYTES, MAX_DIRECTORY_ENTRIES, MAX_FILE_CHUNK_BYTES, MAX_FILE_STREAM_BYTES,
     MAX_FILE_STREAM_CHUNK_BYTES, MAX_FILE_WRITE_BYTES, MAX_FILE_WRITE_STREAM_CHUNK_BYTES,
     MAX_HTTP_INLINE_BODY_BYTES, MAX_HTTP_STREAM_CHUNK_BYTES, MAX_LOCAL_FRAME_BYTES,
     MAX_MEDIA_TEXT_BYTES, MAX_NOTIFICATION_BODY_BYTES, MAX_NOTIFICATION_TITLE_BYTES, MAX_URI_BYTES,
@@ -147,6 +147,12 @@ pub enum SecretSubmitError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContextSubmitError {
+    InvalidPayload,
+    Broker(broker::ErrorCode),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShortcutSubmitError {
     InvalidPayload,
     Broker(broker::ErrorCode),
 }
@@ -537,6 +543,19 @@ pub fn filesystem_write_stream_commit(
         .encode()
         .map_err(|_| FilesystemSubmitError::InvalidPayload)?,
     )
+}
+
+/// Presses one shortcut of the `keyboard.shortcut.v1` grant, by its id. The
+/// grant fixes the keys and the applications; the press happens only while
+/// one of them has the keyboard focus. Submit it from the `Activated` event
+/// of the control the user touched: every press needs a fresh touch.
+pub fn keyboard_shortcut(shortcut: &str) -> Result<RequestId, ShortcutSubmitError> {
+    let payload = KeyboardShortcutRequest {
+        shortcut: shortcut.into(),
+    }
+    .encode()
+    .map_err(|_| ShortcutSubmitError::InvalidPayload)?;
+    request("keyboard.shortcut.v1", "press", &payload).map_err(ShortcutSubmitError::Broker)
 }
 
 /// Opens the now-playing subscription of `media.read.v1`. The completion

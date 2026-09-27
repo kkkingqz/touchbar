@@ -24,9 +24,10 @@ use touchbar_plugin_supervisor::{
     AppearanceProviderBackend, AuditFile, AuditFileLimits, COMPONENT_TASK_MARGIN, ClipboardBackend,
     CommandRunBackend, ComponentCgroup, ConnectionExit, ConnectionIdentity, ConnectionLimits,
     ContextReadBackend, DbusCallBackend, DbusSubscriptionBackend, FilesystemReadBackend,
-    FilesystemWriteBackend, GrantStoreWatcher, HttpRequestBackend, LocalIpcBackend, MediaBackend,
-    NotificationBackend, SecretReadBackend, SupervisorConnection, UriOpenBackend, WaylandClipboard,
-    ZbusDesktopPortal, ZbusSecretService, ZbusTransport, component_task_limit,
+    FilesystemWriteBackend, GrantStoreWatcher, HttpRequestBackend, KeyboardShortcutBackend,
+    LocalIpcBackend, MediaBackend, NotificationBackend, SecretReadBackend, SupervisorConnection,
+    UriOpenBackend, WaylandClipboard, ZbusDesktopPortal, ZbusSecretService, ZbusTransport,
+    component_task_limit,
 };
 use touchbar_policy::{
     CapabilityId, CapabilityRegistry, CapabilityRequest, CapabilityScope, EffectivePolicy,
@@ -45,6 +46,9 @@ const COMPONENT_FD_ENV: &str = "TOUCHBAR_COMPONENT_FD";
 const MANIFEST_FD_ENV: &str = "TOUCHBAR_MANIFEST_FD";
 const ASSET_BUNDLE_FD_ENV: &str = "TOUCHBAR_ASSET_BUNDLE_FD";
 const APPEARANCE_SINK_FD_ENV: &str = "TOUCHBAR_APPEARANCE_SINK_FD";
+/// The session daemon's channel for `keyboard.shortcut.v1` presses.
+const SHORTCUT_FD: i32 = 8;
+const SHORTCUT_FD_ENV: &str = "TOUCHBAR_SHORTCUT_FD";
 const MAX_COMPONENT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const USAGE: &str = "usage: touchbar-plugin-supervisor PACKAGE --host HOST --source github:OWNER/REPO --version VERSION --digest sha256:HEX [--package-digest sha256:HEX] [--appearance-provider ID] [--asset-digest ID=sha256:HEX]... --provenance verified-release|unverified-release|local-development --state DIRECTORY [--grants FILE] [--session-grants FILE] [--media-session FILE] [--audit FILE] [-- HOST_ARGUMENTS...]";
@@ -78,11 +82,15 @@ struct VisualBackends {
     notification: Arc<NotificationBackend<ZbusDesktopPortal>>,
     local_ipc: Arc<LocalIpcBackend>,
     clipboard: Arc<ClipboardBackend<WaylandClipboard>>,
+    keyboard: Arc<KeyboardShortcutBackend>,
 }
 
 impl VisualBackends {
     fn new(state: &Path, source: &str) -> Result<Self> {
         Ok(Self {
+            keyboard: Arc::new(KeyboardShortcutBackend::new(
+                shortcut_channel_from_environment()?,
+            )),
             filesystem_write: Arc::new(
                 FilesystemWriteBackend::new(state, source)
                     .context("open persistent filesystem write quota state")?,
@@ -572,6 +580,7 @@ fn run_session(
         connection.register_backend(CapabilityId::ClipboardReadV1, visual.clipboard.clone());
         connection.register_backend(CapabilityId::ClipboardWriteV1, visual.clipboard.clone());
         let media_backend = Arc::new(MediaBackend::new(arguments.media_session.clone()));
+        connection.register_backend(CapabilityId::KeyboardShortcutV1, visual.keyboard.clone());
         connection.register_resource_backend(CapabilityId::MediaReadV1, media_backend.clone());
         connection.register_backend(CapabilityId::MediaControlV1, media_backend);
     }
@@ -784,6 +793,28 @@ fn parse_arguments() -> Result<Arguments> {
         audit,
         host_arguments,
     })
+}
+
+/// The session daemon's shortcut channel, taken once at start-up so that the
+/// descriptor is close-on-exec again before any host is spawned. Without
+/// one, as outside a session daemon, shortcuts are unavailable.
+fn shortcut_channel_from_environment() -> Result<Option<Seqpacket>> {
+    let Some(value) = env::var_os(SHORTCUT_FD_ENV) else {
+        return Ok(None);
+    };
+    let descriptor = value
+        .to_str()
+        .context("shortcut channel descriptor is not UTF-8")?
+        .parse::<i32>()
+        .context("shortcut channel descriptor is not an integer")?;
+    if descriptor != SHORTCUT_FD {
+        bail!("shortcut channel descriptor is not in its fixed inherited slot");
+    }
+    // SAFETY: sessiond transfers ownership of this fixed inherited descriptor.
+    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    Seqpacket::try_from_owned_fd(descriptor)
+        .map(Some)
+        .context("validate shortcut channel")
 }
 
 fn appearance_sink_from_environment() -> Result<Seqpacket> {

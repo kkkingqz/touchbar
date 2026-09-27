@@ -3406,6 +3406,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "touchbar-first-party-app-actions"
+version = "0.1.0"
+dependencies = [
+ "touchbar-component-sdk",
+]
+
+[[package]]
 name = "touchbar-first-party-capture"
 version = "0.1.0"
 dependencies = [

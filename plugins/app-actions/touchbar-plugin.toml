@@ -1,0 +1,70 @@
+manifest_version = 1
+
+[plugin]
+name = "App Actions"
+version = "1.0.0"
+description = "Application buttons, as on macOS: browser navigation and text formatting, pressed as the applications' own shortcuts"
+license = "MIT OR Apache-2.0"
+source = "github:cameroncooper/touchbar-app-actions"
+api = "^1.0"
+
+[runtime]
+kind = "component"
+entrypoint = "component/plugin.wasm"
+world = "touchbar:plugin/plugin@1.0.0"
+
+[[items]]
+id = "browser"
+label = "Browser Navigation"
+default_width = 240
+
+[[items]]
+id = "formatting"
+label = "Text Formatting"
+default_width = 240
+
+[[asset]]
+id = "reload"
+path = "assets/reload.svg"
+kind = "symbolic-svg"
+width = 24
+height = 24
+
+# Each shortcut names the only applications it may be pressed in, as their
+# focused window's class reports them. Nothing is pressed while another
+# application is in front.
+[[permission]]
+capability = "keyboard.shortcut.v1"
+required = false
+reason = "Go back, forward and reload in browsers, and format text in LibreOffice, when you touch these buttons"
+[permission.scope]
+
+[[permission.scope.shortcuts]]
+id = "back"
+keys = ["alt", "left"]
+applications = ["firefox_firefox", "firefox", "org.mozilla.firefox", "chromium", "chromium-browser", "google-chrome", "brave-browser", "org.gnome.epiphany"]
+
+[[permission.scope.shortcuts]]
+id = "forward"
+keys = ["alt", "right"]
+applications = ["firefox_firefox", "firefox", "org.mozilla.firefox", "chromium", "chromium-browser", "google-chrome", "brave-browser", "org.gnome.epiphany"]
+
+[[permission.scope.shortcuts]]
+id = "reload"
+keys = ["ctrl", "r"]
+applications = ["firefox_firefox", "firefox", "org.mozilla.firefox", "chromium", "chromium-browser", "google-chrome", "brave-browser", "org.gnome.epiphany"]
+
+[[permission.scope.shortcuts]]
+id = "bold"
+keys = ["ctrl", "b"]
+applications = ["libreoffice-writer", "libreoffice-calc", "libreoffice-impress"]
+
+[[permission.scope.shortcuts]]
+id = "italic"
+keys = ["ctrl", "i"]
+applications = ["libreoffice-writer", "libreoffice-calc", "libreoffice-impress"]
+
+[[permission.scope.shortcuts]]
+id = "underline"
+keys = ["ctrl", "u"]
+applications = ["libreoffice-writer", "libreoffice-calc", "libreoffice-impress"]

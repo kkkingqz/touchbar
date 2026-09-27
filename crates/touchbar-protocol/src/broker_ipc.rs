@@ -253,6 +253,13 @@ impl Seqpacket {
         Self { fd }
     }
 
+    /// Another handle on the same socket, for answering from another thread.
+    pub fn try_clone(&self) -> Result<Self, TransportError> {
+        Ok(Self {
+            fd: self.fd.try_clone()?,
+        })
+    }
+
     pub fn try_from_owned_fd(fd: OwnedFd) -> Result<Self, TransportError> {
         let mut socket_type = 0_i32;
         let mut length = std::mem::size_of::<i32>() as libc::socklen_t;

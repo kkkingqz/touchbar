@@ -13,10 +13,11 @@ use touchbar_policy::{
     CapabilityStatus, CommandArgument, CommandRule, CommandRunScope, DbusArgumentConstraint,
     DbusBus, DbusCallRule, DbusCallScope, Decision, EffectivePolicy, FilesystemMountBinding,
     FilesystemMountRequest, FilesystemReadScope, GrantRecord, GrantStore, HttpMethod,
-    HttpOriginRule, HttpRequestScope, MediaControlAction, MediaControlScope, MediaReadScope,
-    PackageInstance, PermissionChangeKind, Provenance, ReusePolicy, RiskClass, RuntimeKind,
-    SessionGrants, SessionVariable, UriOpenScope, calculate_effective_policy, diff_permissions,
-    normalize_manifest_permissions, summarize_trust, validate_capability_scope,
+    HttpOriginRule, HttpRequestScope, KeyboardShortcut, KeyboardShortcutScope, MediaControlAction,
+    MediaControlScope, MediaReadScope, PackageInstance, PermissionChangeKind, Provenance,
+    ReusePolicy, RiskClass, RuntimeKind, SessionGrants, SessionVariable, ShortcutKey, UriOpenScope,
+    calculate_effective_policy, diff_permissions, normalize_manifest_permissions, summarize_trust,
+    validate_capability_scope,
 };
 
 fn source() -> GithubSource {
@@ -276,6 +277,96 @@ suggested_location = "xdg-state:example/current"
     });
     assert!(narrower.is_subset_of(&requests[0].scope));
     assert!(!requests[0].scope.is_subset_of(&narrower));
+}
+
+#[test]
+fn keyboard_shortcuts_are_fixed_chords_bound_to_applications() {
+    let manifest = manifest_with_permissions(
+        r#"
+[[permission]]
+capability = "keyboard.shortcut.v1"
+required = false
+reason = "Go back and forward in the browser"
+[permission.scope]
+
+[[permission.scope.shortcuts]]
+id = "back"
+keys = ["alt", "left"]
+applications = ["firefox_firefox", "chromium"]
+
+[[permission.scope.shortcuts]]
+id = "bold"
+keys = ["ctrl", "b"]
+applications = ["libreoffice-writer"]
+"#,
+    );
+    let requests = normalize_manifest_permissions(&manifest).unwrap();
+    let request = &requests[0];
+    assert_eq!(request.capability, CapabilityId::KeyboardShortcutV1);
+    assert_eq!(
+        request.scope.risk(&request.capability),
+        RiskClass::Controlling
+    );
+    let CapabilityScope::KeyboardShortcut(scope) = &request.scope else {
+        panic!("keyboard shortcut scope");
+    };
+    let back = scope.shortcut("back").unwrap();
+    assert_eq!(back.keys, [ShortcutKey::Alt, ShortcutKey::Left]);
+    assert_eq!(
+        back.keys
+            .iter()
+            .map(|key| key.evdev_code())
+            .collect::<Vec<_>>(),
+        [56, 105]
+    );
+    assert_eq!(ShortcutKey::B.evdev_code(), 48);
+    assert_eq!(ShortcutKey::Digit1.evdev_code(), 2);
+    assert_eq!(ShortcutKey::F12.evdev_code(), 88);
+
+    // Fewer applications narrow a grant; another chord or application does not.
+    let with = |id: &str, keys: &[ShortcutKey], applications: &[&str]| {
+        CapabilityScope::KeyboardShortcut(KeyboardShortcutScope {
+            shortcuts: BTreeSet::from([KeyboardShortcut {
+                id: id.into(),
+                keys: keys.to_vec(),
+                applications: applications.iter().map(|&value| value.into()).collect(),
+            }]),
+        })
+    };
+    let alt_left = [ShortcutKey::Alt, ShortcutKey::Left];
+    assert!(with("back", &alt_left, &["chromium"]).is_subset_of(&request.scope));
+    assert!(!with("back", &alt_left, &["org.gnome.ptyxis"]).is_subset_of(&request.scope));
+    assert!(
+        !with("back", &[ShortcutKey::Ctrl, ShortcutKey::W], &["chromium"])
+            .is_subset_of(&request.scope)
+    );
+    assert!(!with("close", &alt_left, &["chromium"]).is_subset_of(&request.scope));
+
+    let shortcut = |keys: &str, applications: &str| {
+        manifest_with_permissions(&format!(
+            "[[permission]]\ncapability = \"keyboard.shortcut.v1\"\nrequired = false\n\
+             reason = \"x\"\n[permission.scope]\n[[permission.scope.shortcuts]]\n\
+             id = \"x\"\nkeys = {keys}\napplications = {applications}\n"
+        ))
+    };
+    for keys in [
+        r#"["alt"]"#,
+        r#"["left", "alt"]"#,
+        r#"["a", "b"]"#,
+        r#"["ctrl", "ctrl", "b"]"#,
+        r#"["ctrl", "hyper"]"#,
+    ] {
+        assert!(
+            normalize_manifest_permissions(&shortcut(keys, r#"["firefox"]"#)).is_err(),
+            "keys {keys} must be rejected"
+        );
+    }
+    for applications in [r#"[]"#, r#"["Firefox"]"#, r#"["fire fox"]"#] {
+        assert!(
+            normalize_manifest_permissions(&shortcut(r#"["ctrl", "b"]"#, applications)).is_err(),
+            "applications {applications} must be rejected"
+        );
+    }
 }
 
 #[test]
@@ -1208,7 +1299,7 @@ fn grant_store_rejects_invalid_typed_authority() {
 #[test]
 fn registry_and_effective_policy_are_machine_readable() {
     let registry = CapabilityRegistry::default();
-    assert_eq!(registry.supported().count(), 16);
+    assert_eq!(registry.supported().count(), 17);
     assert!(registry.supports(&CapabilityId::HttpRequestV1));
     let omitted = "input.synthesize.v1".parse::<CapabilityId>().unwrap();
     assert!(!omitted.is_known());

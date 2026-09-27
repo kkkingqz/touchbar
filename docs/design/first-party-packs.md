@@ -7,6 +7,7 @@ the product research is complete.
 | Pack | Contributions | Platform behavior proved |
 |---|---|---|
 | System Controls | volume, brightness, microphone, battery, power profile | continuous sliders, glanceable progress, toggles, responsive collapse, command templates |
+| App Actions | browser navigation, text formatting | typed `keyboard.shortcut.v1` chords bound to the focused application, pressed through the RemoteDesktop portal |
 | Media | now playing, transport, timeline | typed `media.read.v1`/`media.control.v1` MPRIS session, live metadata and position, transport, scrubbing |
 | Hyprland Navigator | workspaces, window actions, move window | context disclosure, workspace scrubbers, typed `hyprctl` templates |
 | Capture Studio | screenshots, recording, capture tools | multi-action palettes, destructive recording state, long-running commands |

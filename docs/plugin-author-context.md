@@ -237,6 +237,14 @@ requires the GitHub CLI.
 
 Packages declare permissions in `touchbar-plugin.toml`. Required permissions block startup until granted; optional permissions appear unavailable to the component and must degrade gracefully. Never put secrets in the manifest or package. Filesystem paths, D-Bus calls, HTTP origins, command templates, local sockets, clipboard access, notifications, URI opening, media sessions, and secrets are mediated by the native supervisor and validated against the approved scope.
 
+To act in an application, declare `keyboard.shortcut.v1` shortcuts: each has
+an id, fixed `keys` (modifiers then one key, named as on a US layout, such as
+`["ctrl", "b"]`) and the `applications` (focused window classes, lowercased)
+it may be pressed in. Call `keyboard_shortcut("bold")` from the `Activated`
+event of the button the user touched. Nothing is pressed while another
+application is in front; the request then fails with `unavailable`. The
+first-party App Actions pack in `plugins/app-actions` is the reference.
+
 For playback, prefer `media.read.v1` and `media.control.v1` over raw D-Bus.
 `media_subscribe()` delivers the host-chosen now-playing MPRIS session as typed
 `MediaState` values: on every change, and once per second of the track while it

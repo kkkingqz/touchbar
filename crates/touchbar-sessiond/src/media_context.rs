@@ -211,7 +211,6 @@ mod tests {
     use std::{
         collections::HashMap,
         os::fd::AsRawFd,
-        process::Command,
         sync::{Arc, Mutex},
     };
 
@@ -221,6 +220,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::test_bus::PrivateBus;
 
     fn set_text(key: &str, value: &str) -> ContextChange {
         ContextChange::Set(ContextEvent::text(key, value))
@@ -265,57 +265,6 @@ mod tests {
             ]
         );
         assert!(changes(None, None).is_empty());
-    }
-
-    struct PrivateBus {
-        address: String,
-        pid: libc::pid_t,
-        /// The media-session record, next to the bus socket.
-        record: PathBuf,
-        _directory: tempfile::TempDir,
-    }
-
-    impl PrivateBus {
-        fn start() -> Self {
-            let directory = tempfile::tempdir().unwrap();
-            let address = format!("unix:path={}", directory.path().join("bus").display());
-            let output = Command::new("dbus-daemon")
-                .args([
-                    "--session",
-                    "--fork",
-                    "--nopidfile",
-                    &format!("--address={address}"),
-                    "--print-address=1",
-                    "--print-pid=1",
-                ])
-                .output()
-                .unwrap();
-            assert!(output.status.success());
-            let output = String::from_utf8(output.stdout).unwrap();
-            let mut lines = output.lines();
-            let address = lines.next().unwrap().to_owned();
-            let pid = lines.next().unwrap().parse().unwrap();
-            Self {
-                address,
-                pid,
-                record: directory.path().join("media-session"),
-                _directory: directory,
-            }
-        }
-
-        fn connect(&self) -> Connection {
-            Builder::address(self.address.as_str())
-                .unwrap()
-                .build()
-                .unwrap()
-        }
-    }
-
-    impl Drop for PrivateBus {
-        fn drop(&mut self) {
-            // SAFETY: this PID came directly from the private dbus-daemon.
-            let _ = unsafe { libc::kill(self.pid, libc::SIGTERM) };
-        }
     }
 
     struct FakePlayer(Arc<Mutex<&'static str>>);
@@ -371,7 +320,7 @@ mod tests {
         let signal = EventSignal::new().unwrap();
         let watcher_signal = signal.try_clone().unwrap();
         let watcher = MprisWatcher::start(bus.connect(), move || watcher_signal.notify()).unwrap();
-        MediaContextSource::with_watcher(watcher, signal, Some(bus.record.clone()))
+        MediaContextSource::with_watcher(watcher, signal, Some(bus.file("media-session")))
     }
 
     /// The next non-empty batch of changes, waiting on the source's eventfd.
@@ -406,7 +355,7 @@ mod tests {
             ],
             "a player found paused has not been active"
         );
-        let recorded = || session_file::read(&bus.record);
+        let recorded = || session_file::read(&bus.file("media-session"));
         assert_eq!(recorded().as_deref(), Some("org.mpris.MediaPlayer2.vlc"));
 
         let (video, status) = player(
