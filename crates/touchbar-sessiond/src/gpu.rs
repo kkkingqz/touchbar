@@ -187,6 +187,103 @@ struct Layer {
     ready: bool,
     /// The last RGBA upload, to find the columns the next one changes.
     pixels: Option<Vec<u8>>,
+    /// A DMA-BUF layer's previous content: each commit is copied into this
+    /// target, which then trades places with the current one, so the two
+    /// can be compared.
+    spare: Option<(glow::Texture, glow::Framebuffer)>,
+}
+
+/// The column comparison of a layer's last two DMA-BUF commits.
+struct ComparePass {
+    program: glow::Program,
+    old_uniform: Option<glow::UniformLocation>,
+    new_uniform: Option<glow::UniformLocation>,
+    height_uniform: Option<glow::UniformLocation>,
+    /// One texel per scene column.
+    texture: glow::Texture,
+    framebuffer: glow::Framebuffer,
+    width: u32,
+    flags: Vec<u8>,
+}
+
+impl ComparePass {
+    fn new(gl: &glow::Context, width: u32) -> Result<Self> {
+        let program = compile_compare_program(gl)?;
+        // SAFETY: the caller has made this context current.
+        unsafe {
+            let (texture, framebuffer) = create_color_target(gl, width, 1, "comparison")?;
+            Ok(Self {
+                old_uniform: gl.get_uniform_location(program, "u_old"),
+                new_uniform: gl.get_uniform_location(program, "u_new"),
+                height_uniform: gl.get_uniform_location(program, "u_height"),
+                program,
+                texture,
+                framebuffer,
+                width,
+                flags: vec![0; width as usize * 4],
+            })
+        }
+    }
+
+    /// The column ranges in which two textures of `width` by `height`
+    /// differ. Reading the result waits for the GPU, but only for one row.
+    fn changed_columns(
+        &mut self,
+        gl: &glow::Context,
+        old: glow::Texture,
+        new: glow::Texture,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<(u32, u32)>> {
+        if width > self.width {
+            bail!("layer is wider than the comparison target");
+        }
+        let flags = &mut self.flags[..width as usize * 4];
+        // SAFETY: every object belongs to the current compositor context,
+        // and `flags` holds exactly the requested row.
+        unsafe {
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.framebuffer));
+            gl.viewport(0, 0, width as i32, 1);
+            gl.disable(glow::BLEND);
+            gl.use_program(Some(self.program));
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(old));
+            gl.uniform_1_i32(self.old_uniform.as_ref(), 0);
+            gl.active_texture(glow::TEXTURE1);
+            gl.bind_texture(glow::TEXTURE_2D, Some(new));
+            gl.uniform_1_i32(self.new_uniform.as_ref(), 1);
+            gl.uniform_1_i32(self.height_uniform.as_ref(), height as i32);
+            gl.draw_arrays(glow::TRIANGLES, 0, 3);
+            gl.active_texture(glow::TEXTURE0);
+            gl.read_pixels(
+                0,
+                0,
+                width as i32,
+                1,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(flags)),
+            );
+        }
+        let mut spans = ColumnSpans::default();
+        for (column, texel) in flags.as_chunks::<4>().0.iter().enumerate() {
+            if texel[0] != 0 {
+                spans.add(column as u32, column as u32 + 1);
+            }
+        }
+        Ok(spans.spans)
+    }
+
+    /// # Safety
+    /// The context that created the pass must be current.
+    unsafe fn destroy(&self, gl: &glow::Context) {
+        // SAFETY: guaranteed by the caller.
+        unsafe {
+            gl.delete_framebuffer(self.framebuffer);
+            gl.delete_texture(self.texture);
+            gl.delete_program(self.program);
+        }
+    }
 }
 
 struct OutputBuffer {
@@ -212,6 +309,7 @@ pub struct GpuCompositor {
     flip_uniform: Option<glow::UniformLocation>,
     opacity_uniform: Option<glow::UniformLocation>,
     transpose_uniform: Option<glow::UniformLocation>,
+    compare: ComparePass,
     scene_texture: glow::Texture,
     scene_framebuffer: glow::Framebuffer,
     image_target_texture: ImageTargetTexture,
@@ -353,6 +451,7 @@ impl GpuCompositor {
             flip_uniform,
             opacity_uniform,
             transpose_uniform,
+            compare,
             scene_texture,
             scene_framebuffer,
             renderer_name,
@@ -362,6 +461,7 @@ impl GpuCompositor {
             let flip_uniform = gl.get_uniform_location(program, "u_flip_y");
             let opacity_uniform = gl.get_uniform_location(program, "u_opacity");
             let transpose_uniform = gl.get_uniform_location(program, "u_transpose");
+            let compare = ComparePass::new(&gl, width)?;
             let (scene_texture, scene_framebuffer) =
                 create_color_target(&gl, width, height, "scene")?;
             (
@@ -369,6 +469,7 @@ impl GpuCompositor {
                 flip_uniform,
                 opacity_uniform,
                 transpose_uniform,
+                compare,
                 scene_texture,
                 scene_framebuffer,
                 renderer_name,
@@ -385,6 +486,7 @@ impl GpuCompositor {
             flip_uniform,
             opacity_uniform,
             transpose_uniform,
+            compare,
             scene_texture,
             scene_framebuffer,
             image_target_texture,
@@ -621,8 +723,28 @@ impl GpuCompositor {
             bail!("layer geometry exceeds the compositor target");
         }
 
-        let (layer_texture, layer_framebuffer) = self.ensure_layer(layer_id, geometry)?;
-        self.damage.add(geometry.x, geometry.x + geometry.width);
+        self.ensure_layer(layer_id, geometry)?;
+        // Keep what the layer shows now in its spare target and draw the
+        // commit into the other one.
+        let previous = if self.layers[&layer_id].ready {
+            let spare = match self.layers[&layer_id].spare {
+                Some(spare) => spare,
+                // SAFETY: this compositor context is current.
+                None => unsafe {
+                    create_color_target(&self.gl, geometry.width, geometry.height, "layer")?
+                },
+            };
+            let layer = self.layers.get_mut(&layer_id).expect("layer ensured above");
+            layer.spare = Some((layer.texture, layer.framebuffer));
+            (layer.texture, layer.framebuffer) = spare;
+            layer.spare.map(|(texture, _)| texture)
+        } else {
+            None
+        };
+        let (layer_texture, layer_framebuffer) = {
+            let layer = &self.layers[&layer_id];
+            (layer.texture, layer.framebuffer)
+        };
         let plane = &data.planes[0];
         let attributes = image_attributes(data, plane);
         // EGL_LINUX_DMA_BUF_EXT requires EGL_NO_CONTEXT and a null client buffer.
@@ -661,6 +783,23 @@ impl GpuCompositor {
 
         if let Some(layer) = self.layers.get_mut(&layer_id) {
             layer.ready = true;
+        }
+        match previous {
+            // Plugins commit whole frames, often unchanged ones; only the
+            // columns that differ count.
+            Some(previous) => {
+                let columns = self.compare.changed_columns(
+                    &self.gl,
+                    previous,
+                    layer_texture,
+                    geometry.width,
+                    geometry.height,
+                )?;
+                for (start, end) in columns {
+                    self.damage.add(geometry.x + start, geometry.x + end);
+                }
+            }
+            None => self.damage.add(geometry.x, geometry.x + geometry.width),
         }
 
         // Queue a GPU completion fence after the copy. The Wayland buffer can
@@ -867,6 +1006,10 @@ impl GpuCompositor {
         unsafe {
             self.gl.delete_framebuffer(layer.framebuffer);
             self.gl.delete_texture(layer.texture);
+            if let Some((texture, framebuffer)) = layer.spare {
+                self.gl.delete_framebuffer(framebuffer);
+                self.gl.delete_texture(texture);
+            }
         }
     }
 
@@ -903,6 +1046,7 @@ impl GpuCompositor {
                 framebuffer,
                 ready: false,
                 pixels: None,
+                spare: None,
             },
         );
         Ok((texture, framebuffer))
@@ -1045,6 +1189,12 @@ impl GpuCompositor {
         };
         self.scene_texture = texture;
         self.scene_framebuffer = framebuffer;
+        // SAFETY: as above.
+        let compare = unsafe {
+            self.compare.destroy(&self.gl);
+            ComparePass::new(&self.gl, width)
+        };
+        self.compare = compare?;
         self.width = width;
         self.damage = ColumnSpans::default();
         self.damage.add(0, width);
@@ -1263,16 +1413,6 @@ fn checksum(bytes: &[u8]) -> u64 {
 }
 
 fn compile_program(gl: &glow::Context) -> Result<glow::Program> {
-    const VERTEX: &str = r#"#version 300 es
-precision highp float;
-out vec2 v_uv;
-void main() {
-    vec2 positions[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
-    vec2 uvs[3] = vec2[3](vec2(0.0, 0.0), vec2(2.0, 0.0), vec2(0.0, 2.0));
-    gl_Position = vec4(positions[gl_VertexID], 0.0, 1.0);
-    v_uv = uvs[gl_VertexID];
-}
-"#;
     const FRAGMENT: &str = r#"#version 300 es
 precision highp float;
 uniform sampler2D u_texture;
@@ -1288,11 +1428,49 @@ void main() {
     color = texture(u_texture, uv) * u_opacity;
 }
 "#;
+    link_program(gl, FRAGMENT)
+}
+
+/// Draws one texel per column of a 1-pixel-high target: white where any
+/// row of the two same-sized textures differs.
+fn compile_compare_program(gl: &glow::Context) -> Result<glow::Program> {
+    const FRAGMENT: &str = r#"#version 300 es
+precision highp float;
+uniform sampler2D u_old;
+uniform sampler2D u_new;
+uniform int u_height;
+out vec4 color;
+void main() {
+    int x = int(gl_FragCoord.x);
+    float differs = 0.0;
+    for (int y = 0; y < u_height; y++) {
+        if (any(notEqual(texelFetch(u_old, ivec2(x, y), 0), texelFetch(u_new, ivec2(x, y), 0)))) {
+            differs = 1.0;
+            break;
+        }
+    }
+    color = vec4(differs);
+}
+"#;
+    link_program(gl, FRAGMENT)
+}
+
+fn link_program(gl: &glow::Context, fragment_source: &str) -> Result<glow::Program> {
+    const VERTEX: &str = r#"#version 300 es
+precision highp float;
+out vec2 v_uv;
+void main() {
+    vec2 positions[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+    vec2 uvs[3] = vec2[3](vec2(0.0, 0.0), vec2(2.0, 0.0), vec2(0.0, 2.0));
+    gl_Position = vec4(positions[gl_VertexID], 0.0, 1.0);
+    v_uv = uvs[gl_VertexID];
+}
+"#;
 
     // SAFETY: the caller has made this context current.
     unsafe {
         let vertex = compile_shader(gl, glow::VERTEX_SHADER, VERTEX)?;
-        let fragment = compile_shader(gl, glow::FRAGMENT_SHADER, FRAGMENT)?;
+        let fragment = compile_shader(gl, glow::FRAGMENT_SHADER, fragment_source)?;
         let program = gl
             .create_program()
             .map_err(|error| anyhow!("create compositor program: {error}"))?;
@@ -1337,7 +1515,12 @@ impl Drop for GpuCompositor {
             for layer in std::mem::take(&mut self.layers).into_values() {
                 self.gl.delete_framebuffer(layer.framebuffer);
                 self.gl.delete_texture(layer.texture);
+                if let Some((texture, framebuffer)) = layer.spare {
+                    self.gl.delete_framebuffer(framebuffer);
+                    self.gl.delete_texture(texture);
+                }
             }
+            self.compare.destroy(&self.gl);
             self.gl.delete_framebuffer(self.scene_framebuffer);
             self.gl.delete_texture(self.scene_texture);
             self.gl.delete_program(self.program);
