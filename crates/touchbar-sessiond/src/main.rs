@@ -30,9 +30,9 @@ use touchbar_protocol::{
     TOUCHBAR_PROTOCOL_VERSION,
     appearance::{AppearanceSnapshot, ColorRole, ColorScheme, MotionPolicy},
     hardware_ipc::{
-        HardwareMessage, KeyPhase, SessionMessage, SystemKey, TouchEvent as OutputTouchEvent,
-        TouchPhase as OutputTouchPhase, receive_hardware_message, receive_hardware_swapchain,
-        send_session_message,
+        DamageRect, HardwareMessage, KeyPhase, SessionMessage, SystemKey,
+        TouchEvent as OutputTouchEvent, TouchPhase as OutputTouchPhase, receive_hardware_message,
+        receive_hardware_swapchain, send_session_message,
     },
     server::{
         touchbar_appearance_v1 as appearance_protocol, touchbar_manager_v1, touchbar_surface_v1,
@@ -436,13 +436,19 @@ impl DirectOutput {
         self.event_signal.as_raw_fd()
     }
 
-    fn submit(&mut self, index: usize) -> Result<u64> {
+    /// Sends a rendered buffer, after the rectangles in which it differs
+    /// from the previous one; none means it may differ anywhere.
+    fn submit(&mut self, index: usize, damage: &[DamageRect]) -> Result<u64> {
         let slot = self
             .in_flight
             .get_mut(index)
             .context("submitted ADP buffer index is out of range")?;
         if slot.is_some() {
             bail!("ADP buffer {index} was submitted while still in flight");
+        }
+        for &rect in damage {
+            send_session_message(&mut self.stream, SessionMessage::FrameDamage(rect))
+                .context("send ADP frame damage")?;
         }
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.wrapping_add(1).max(1);
@@ -2706,7 +2712,11 @@ impl State {
         }
 
         let had_direct_output = self.direct_output.is_some();
-        let output_index = if let Some(output) = &mut self.direct_output {
+        // The panel already shows a frame in which nothing changed.
+        let unchanged = self.gpu.output_unchanged();
+        let output_index = if unchanged {
+            None
+        } else if let Some(output) = &mut self.direct_output {
             match output.acquire() {
                 Ok(index) => index,
                 Err(error) => {
@@ -2717,13 +2727,15 @@ impl State {
         } else {
             None
         };
-        if had_direct_output && self.direct_output.is_some() && output_index.is_none() {
+        if had_direct_output && self.direct_output.is_some() && output_index.is_none() && !unchanged
+        {
             // All buffers are owned by the presenter. Keep only the newest
             // retained plugin layers and retry when a release arrives.
             return Ok(());
         }
 
         self.gpu.compose_scene_gpu();
+        let damage = self.gpu.take_output_damage();
         let needs_readback = self.direct_output.is_none()
             || self.frame_publisher.is_some()
             || self.preview_output.is_some();
@@ -2739,7 +2751,7 @@ impl State {
             self.direct_output
                 .as_mut()
                 .context("ADP output disappeared during rendering")?
-                .submit(index)?;
+                .submit(index, &damage)?;
         }
         let now = Instant::now();
         self.first_frame_at.get_or_insert(now);

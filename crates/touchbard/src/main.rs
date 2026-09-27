@@ -30,8 +30,9 @@ use touchbar_protocol::{
     FRAME_STREAM_FLAGS_OFFSET, FRAME_STREAM_HEADER_SIZE, FRAME_STREAM_MAGIC,
     FRAME_STREAM_SEQUENCE_OFFSET, FRAME_STREAM_SLOT_COUNT,
     hardware_ipc::{
-        HardwareMessage, HardwareSwapchain, SessionMessage, TouchEvent, TouchPhase,
-        receive_session_message, send_hardware_message, send_hardware_swapchain,
+        DamageRect, HardwareMessage, HardwareSwapchain, MAX_FRAME_DAMAGE, SessionMessage,
+        TouchEvent, TouchPhase, receive_session_message, send_hardware_message,
+        send_hardware_swapchain,
     },
 };
 use touchbar_system_bar::{SystemBar, SystemBarConfig, SystemBarRenderer};
@@ -1066,14 +1067,81 @@ fn atomic_modeset(
 }
 
 fn atomic_flip(card: &Card, selection: &Selection, framebuffer: framebuffer::Handle) -> Result<()> {
+    atomic_flip_damaged(card, selection, framebuffer, &[])
+}
+
+/// Flips to `framebuffer`, telling the driver that only `damage` differs
+/// from the frame on the panel: appletbdrm then sends only those rectangles
+/// over USB. Empty damage, or a plane without FB_DAMAGE_CLIPS, updates the
+/// whole panel.
+fn atomic_flip_damaged(
+    card: &Card,
+    selection: &Selection,
+    framebuffer: framebuffer::Handle,
+    damage: &[DamageRect],
+) -> Result<()> {
     let mut request = atomic::AtomicModeReq::new();
     request.add_property(
         selection.plane,
         find_prop_id(card, selection.plane, "FB_ID")?,
         property::Value::Framebuffer(Some(framebuffer)),
     );
-    card.atomic_commit(AtomicCommitFlags::empty(), request)
-        .context("commit Touch Bar atomic framebuffer flip")
+    let clips = match find_prop_id(card, selection.plane, "FB_DAMAGE_CLIPS") {
+        Ok(property) if !damage.is_empty() => Some(property),
+        _ => None,
+    };
+    let blob = match clips {
+        Some(property) => {
+            // An array of struct drm_mode_rect: x1, y1, x2, y2.
+            let mut rects = damage
+                .iter()
+                .flat_map(|rect| {
+                    [
+                        i32::from(rect.x),
+                        i32::from(rect.y),
+                        i32::from(rect.x) + i32::from(rect.width),
+                        i32::from(rect.y) + i32::from(rect.height),
+                    ]
+                })
+                .flat_map(i32::to_ne_bytes)
+                .collect::<Vec<_>>();
+            let blob = drm_ffi::mode::create_property_blob(card.as_fd(), &mut rects)
+                .context("create Touch Bar damage clips")?
+                .blob_id;
+            request.add_property(
+                selection.plane,
+                property,
+                property::Value::Blob(u64::from(blob)),
+            );
+            Some(blob)
+        }
+        None => None,
+    };
+    let result = card
+        .atomic_commit(AtomicCommitFlags::empty(), request)
+        .context("commit Touch Bar atomic framebuffer flip");
+    if let Some(blob) = blob {
+        // The commit holds its own reference to the clips.
+        let _ = card.destroy_property_blob(u64::from(blob));
+    }
+    result
+}
+
+/// Adds a rectangle a session named for its next frame.
+fn add_frame_damage(
+    damage: &mut Vec<DamageRect>,
+    rect: DamageRect,
+    display_width: u16,
+    display_height: u16,
+) -> Result<()> {
+    if damage.len() == MAX_FRAME_DAMAGE {
+        bail!("session named more than {MAX_FRAME_DAMAGE} damage rectangles for one frame");
+    }
+    if !rect.fits(u32::from(display_width), u32::from(display_height)) {
+        bail!("session damage {rect:?} lies outside the Touch Bar");
+    }
+    damage.push(rect);
+    Ok(())
 }
 
 fn draw_scanout(
@@ -1308,6 +1376,7 @@ fn prime_serve(node: &Path, socket: &Path) -> Result<()> {
         pitch,
         buffer_size: u64::from(pitch) * u64::from(PHYSICAL_HEIGHT),
         buffer_count: BUFFER_COUNT as u16,
+        frame_damage: false,
     };
 
     let mut stream = UnixStream::connect(socket)
@@ -1494,6 +1563,7 @@ impl ServiceHardware {
             pitch,
             buffer_size: u64::from(pitch) * u64::from(display_height),
             buffer_count: Self::BUFFER_COUNT as u16,
+            frame_damage: true,
         };
 
         let touch_input =
@@ -1832,6 +1902,7 @@ impl ServiceHardware {
         let waiting_started = Instant::now();
         let mut display_started = None;
         let mut last_sequence = 0_u64;
+        let mut damage = Vec::with_capacity(MAX_FRAME_DAMAGE);
         loop {
             if display_started.is_none() && waiting_started.elapsed() >= Duration::from_secs(5) {
                 bail!("session compositor did not submit a buffer within five seconds");
@@ -1925,6 +1996,10 @@ impl ServiceHardware {
                     self.keyboard.emit(key, phase)?;
                     continue;
                 }
+                SessionMessage::FrameDamage(rect) => {
+                    add_frame_damage(&mut damage, rect, self.display_width, self.display_height)?;
+                    continue;
+                }
                 SessionMessage::FrameReady { index, sequence } => (usize::from(index), sequence),
             };
             let framebuffer = *self
@@ -1945,13 +2020,16 @@ impl ServiceHardware {
             if display_started.is_none() {
                 let _ = self.wake()?;
             }
-            self.card
-                .dirty_framebuffer(
-                    framebuffer,
-                    &[ClipRect::new(0, 0, self.display_width, self.display_height)],
-                )
-                .context("mark GPU-rendered persistent framebuffer dirty")?;
-            atomic_flip(&self.card, &self.selection, framebuffer)?;
+            // Damage is relative to this session's previous frame; the
+            // panel shows another image until its first one.
+            let partial = matches!(self.scanout, ServiceScanout::Session { .. });
+            atomic_flip_damaged(
+                &self.card,
+                &self.selection,
+                framebuffer,
+                if partial { &damage } else { &[] },
+            )?;
+            damage.clear();
             if let ServiceScanout::Session {
                 index: released_index,
                 sequence: released_sequence,
@@ -2245,6 +2323,7 @@ fn run_hardware_session(
         pitch,
         buffer_size: u64::from(pitch) * u64::from(display_height),
         buffer_count: BUFFER_COUNT as u16,
+        frame_damage: true,
     };
     let borrowed = prime_fds.iter().map(AsFd::as_fd).collect::<Vec<_>>();
     send_hardware_swapchain(&stream, info, &borrowed).context("lend direct ADP swapchain")?;
@@ -2310,6 +2389,7 @@ fn run_hardware_session(
     let mut display_started = None;
     let mut current: Option<(usize, u64)> = None;
     let mut last_sequence = 0_u64;
+    let mut damage = Vec::with_capacity(MAX_FRAME_DAMAGE);
     let mut updates = 0_u64;
     let mut last_activity = Instant::now();
     let mut backlight_state = BacklightState::Active;
@@ -2424,6 +2504,10 @@ fn run_hardware_session(
             .context("receive direct ADP buffer-ready event")?;
         let (index, sequence) = match event {
             SessionMessage::FrameReady { index, sequence } => (index, sequence),
+            SessionMessage::FrameDamage(rect) => {
+                add_frame_damage(&mut damage, rect, display_width, display_height)?;
+                continue;
+            }
             SessionMessage::Key { key, phase } => {
                 let keyboard = virtual_keyboard
                     .as_mut()
@@ -2443,18 +2527,14 @@ fn run_hardware_session(
             bail!("compositor submitted a stale direct-output sequence");
         }
 
-        card.dirty_framebuffer(
-            framebuffer,
-            &[ClipRect::new(0, 0, display_width, display_height)],
-        )
-        .context("mark GPU-rendered Touch Bar framebuffer dirty")?;
         if current.is_none() {
             atomic_modeset(&card, &selection, framebuffer)?;
             display_started = Some(Instant::now());
             println!("hardware-session active first_sequence={sequence}");
         } else {
-            atomic_flip(&card, &selection, framebuffer)?;
+            atomic_flip_damaged(&card, &selection, framebuffer, &damage)?;
         }
+        damage.clear();
         if let Some((released_index, released_sequence)) = current {
             send_hardware_message(
                 &mut stream,

@@ -13,7 +13,9 @@ use std::{
 use anyhow::{Context as _, Result, anyhow, bail};
 use glow::HasContext;
 use khronos_egl as egl;
-use touchbar_protocol::hardware_ipc::{HardwareSwapchain, OutputTransform};
+use touchbar_protocol::hardware_ipc::{
+    DamageRect, HardwareSwapchain, MAX_FRAME_DAMAGE, OutputTransform,
+};
 
 use crate::{
     DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_XRGB8888, DmabufBufferData,
@@ -183,6 +185,8 @@ struct Layer {
     texture: glow::Texture,
     framebuffer: glow::Framebuffer,
     ready: bool,
+    /// The last RGBA upload, to find the columns the next one changes.
+    pixels: Option<Vec<u8>>,
 }
 
 struct OutputBuffer {
@@ -219,6 +223,9 @@ pub struct GpuCompositor {
     height: u32,
     renderer_name: String,
     background_color: [f32; 4],
+    /// Scene columns changed since the last frame sent to the presenter.
+    /// Every layer spans the full height, so columns are the whole story.
+    damage: ColumnSpans,
 }
 
 impl GpuCompositor {
@@ -389,11 +396,63 @@ impl GpuCompositor {
             height,
             renderer_name,
             background_color: [0.0, 0.0, 0.0, 1.0],
+            damage: ColumnSpans::default(),
         })
     }
 
     pub fn set_background_color(&mut self, rgba: [f32; 4]) {
+        if rgba != self.background_color {
+            self.damage.add(0, self.width);
+        }
         self.background_color = rgba;
+    }
+
+    /// Whether the presenter takes damage and the scene has none: every
+    /// change to it goes through the layers, the background or the size.
+    pub fn output_unchanged(&self) -> bool {
+        self.damage.spans.is_empty()
+            && self
+                .output
+                .as_ref()
+                .is_some_and(|output| output.info.frame_damage)
+    }
+
+    /// The parts of the output buffer the next frame changes, in its
+    /// physical pixels, and forgets them. Empty when the presenter takes
+    /// only whole frames, or when nothing is known to have changed.
+    pub fn take_output_damage(&mut self) -> Vec<DamageRect> {
+        let mut spans = std::mem::take(&mut self.damage);
+        let Some(output) = self
+            .output
+            .as_ref()
+            .filter(|output| output.info.frame_damage)
+        else {
+            return Vec::new();
+        };
+        spans.reduce_to(MAX_FRAME_DAMAGE);
+        let left = (output.info.logical_width - self.width) / 2;
+        spans
+            .spans
+            .iter()
+            .map(|&(start, end)| {
+                let (start, length) = ((left + start) as u16, (end - start) as u16);
+                match output.transform {
+                    OutputTransform::Identity => DamageRect {
+                        x: start,
+                        y: 0,
+                        width: length,
+                        height: output.info.physical_height as u16,
+                    },
+                    // The scene runs along physical Y.
+                    OutputTransform::QuarterTurn => DamageRect {
+                        x: 0,
+                        y: start,
+                        width: output.info.physical_width as u16,
+                        height: length,
+                    },
+                }
+            })
+            .collect()
     }
 
     pub fn renderer_name(&self) -> &str {
@@ -461,6 +520,8 @@ impl GpuCompositor {
             transform,
             buffers: imported,
         });
+        // A new presenter's panel shows none of this scene yet.
+        self.damage.add(0, self.width);
         Ok(())
     }
 
@@ -561,6 +622,7 @@ impl GpuCompositor {
         }
 
         let (layer_texture, layer_framebuffer) = self.ensure_layer(layer_id, geometry)?;
+        self.damage.add(geometry.x, geometry.x + geometry.width);
         let plane = &data.planes[0];
         let attributes = image_attributes(data, plane);
         // EGL_LINUX_DMA_BUF_EXT requires EGL_NO_CONTEXT and a null client buffer.
@@ -667,6 +729,22 @@ impl GpuCompositor {
             bail!("layer geometry exceeds the compositor target");
         }
         let (texture, _) = self.ensure_layer(layer_id, geometry)?;
+        let layer = self
+            .layers
+            .get_mut(&layer_id)
+            .expect("ensure_layer created the layer");
+        match layer.pixels.as_deref().filter(|_| layer.ready) {
+            Some(previous) => {
+                for (start, end) in changed_columns(previous, pixels, geometry.width as usize) {
+                    self.damage.add(geometry.x + start, geometry.x + end);
+                }
+            }
+            None => self.damage.add(geometry.x, geometry.x + geometry.width),
+        }
+        match &mut layer.pixels {
+            Some(previous) => previous.copy_from_slice(pixels),
+            None => layer.pixels = Some(pixels.to_vec()),
+        }
         // SAFETY: the layer texture belongs to the current compositor context.
         unsafe {
             self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
@@ -781,6 +859,10 @@ impl GpuCompositor {
         let Some(layer) = self.layers.remove(&layer_id) else {
             return;
         };
+        if layer.ready {
+            let geometry = layer.geometry;
+            self.damage.add(geometry.x, geometry.x + geometry.width);
+        }
         // SAFETY: the objects were created by this current GL context.
         unsafe {
             self.gl.delete_framebuffer(layer.framebuffer);
@@ -799,6 +881,13 @@ impl GpuCompositor {
             self.remove_layer(layer_id);
         }
         if let Some(layer) = self.layers.get_mut(&layer_id) {
+            if layer.ready && layer.geometry != geometry {
+                // Moved, faded or restacked: both where it was and where it
+                // is now change.
+                let old = layer.geometry;
+                self.damage.add(old.x, old.x + old.width);
+                self.damage.add(geometry.x, geometry.x + geometry.width);
+            }
             layer.geometry = geometry;
             return Ok((layer.texture, layer.framebuffer));
         }
@@ -813,6 +902,7 @@ impl GpuCompositor {
                 texture,
                 framebuffer,
                 ready: false,
+                pixels: None,
             },
         );
         Ok((texture, framebuffer))
@@ -956,6 +1046,8 @@ impl GpuCompositor {
         self.scene_texture = texture;
         self.scene_framebuffer = framebuffer;
         self.width = width;
+        self.damage = ColumnSpans::default();
+        self.damage.add(0, width);
         Ok(())
     }
 
@@ -1088,6 +1180,79 @@ fn image_attributes(data: &DmabufBufferData, plane: &DmabufPlane) -> Vec<egl::At
     attributes
 }
 
+/// Sorted, disjoint, nonadjacent half-open column ranges.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct ColumnSpans {
+    spans: Vec<(u32, u32)>,
+}
+
+impl ColumnSpans {
+    fn add(&mut self, start: u32, end: u32) {
+        if start >= end {
+            return;
+        }
+        let (mut start, mut end) = (start, end);
+        // Absorb every span that overlaps or touches the new one.
+        self.spans.retain(|&(first, last)| {
+            if last < start || first > end {
+                return true;
+            }
+            start = start.min(first);
+            end = end.max(last);
+            false
+        });
+        let index = self.spans.partition_point(|&(first, _)| first < start);
+        self.spans.insert(index, (start, end));
+    }
+
+    /// Joins the spans with the narrowest gaps until at most `count` remain,
+    /// sending the fewest unchanged columns.
+    fn reduce_to(&mut self, count: usize) {
+        while self.spans.len() > count.max(1) {
+            let index = (1..self.spans.len())
+                .min_by_key(|&index| self.spans[index].0 - self.spans[index - 1].1)
+                .expect("at least two spans");
+            let (_, end) = self.spans.remove(index);
+            self.spans[index - 1].1 = end;
+        }
+    }
+}
+
+/// The column ranges in which two same-sized top-down RGBA images differ.
+fn changed_columns(previous: &[u8], next: &[u8], width: usize) -> Vec<(u32, u32)> {
+    let mut changed = vec![false; width];
+    for (old_row, new_row) in previous
+        .chunks_exact(width * 4)
+        .zip(next.chunks_exact(width * 4))
+    {
+        if old_row == new_row {
+            continue;
+        }
+        for (column, (old, new)) in old_row
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(new_row.as_chunks::<4>().0)
+            .enumerate()
+        {
+            changed[column] |= old != new;
+        }
+    }
+    let mut spans = Vec::new();
+    let mut start = None;
+    for (column, &differs) in changed.iter().chain([&false]).enumerate() {
+        match (differs, start) {
+            (true, None) => start = Some(column as u32),
+            (false, Some(first)) => {
+                spans.push((first, column as u32));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
 fn checksum(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in bytes {
@@ -1191,7 +1356,45 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    use super::{SYNC_IOC_FILE_INFO, preferred_render_node, validate_sync_file};
+    use super::{
+        ColumnSpans, SYNC_IOC_FILE_INFO, changed_columns, preferred_render_node, validate_sync_file,
+    };
+
+    #[test]
+    fn column_spans_merge_what_touches_and_keep_the_rest_apart() {
+        let mut spans = ColumnSpans::default();
+        spans.add(100, 160);
+        spans.add(400, 420);
+        spans.add(160, 170);
+        spans.add(5, 5);
+        spans.add(0, 10);
+        spans.add(150, 405);
+        assert_eq!(spans.spans, [(0, 10), (100, 420)]);
+    }
+
+    #[test]
+    fn reducing_joins_the_narrowest_gaps_first() {
+        let mut spans = ColumnSpans::default();
+        for (start, end) in [(0, 10), (12, 20), (100, 110), (1000, 1010)] {
+            spans.add(start, end);
+        }
+        spans.reduce_to(2);
+        assert_eq!(spans.spans, [(0, 110), (1000, 1010)]);
+    }
+
+    #[test]
+    fn changed_columns_are_found_in_any_row() {
+        let width = 8;
+        let previous = vec![0_u8; width * 3 * 4];
+        let mut next = previous.clone();
+        next[4 + 3] = 1; // row 0, column 1, alpha
+        let row_two = 2 * width * 4;
+        next[row_two + 2 * 4] = 9; // row 2, column 2
+        next[row_two + 6 * 4 + 1] = 9; // row 2, column 6
+        next[row_two + 7 * 4 + 2] = 9; // row 2, column 7, the last
+        assert_eq!(changed_columns(&previous, &next, width), [(1, 3), (6, 8)]);
+        assert!(changed_columns(&previous, &previous, width).is_empty());
+    }
 
     #[test]
     fn sync_file_ioctl_matches_linux_uapi() {

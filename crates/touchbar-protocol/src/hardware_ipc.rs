@@ -21,6 +21,10 @@ pub const MAX_SWAPCHAIN_BUFFERS: usize = 3;
 pub const MESSAGE_MAGIC: [u8; 8] = *b"TBARMSG1";
 pub const MESSAGE_VERSION: u16 = 1;
 pub const MESSAGE_SIZE: usize = 32;
+/// The most damage rectangles one frame may name.
+pub const MAX_FRAME_DAMAGE: usize = 8;
+/// Swapchain header flag: the presenter accepts `FrameDamage`.
+const SWAPCHAIN_FRAME_DAMAGE: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TouchPhase {
@@ -39,10 +43,58 @@ pub struct TouchEvent {
     pub y_millipixels: i32,
 }
 
+/// A nonempty rectangle of the physical scanout buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DamageRect {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl DamageRect {
+    fn encode(self) -> u64 {
+        u64::from(self.x)
+            | u64::from(self.y) << 16
+            | u64::from(self.width) << 32
+            | u64::from(self.height) << 48
+    }
+
+    fn decode(payload: u64) -> io::Result<Self> {
+        let rect = Self {
+            x: payload as u16,
+            y: (payload >> 16) as u16,
+            width: (payload >> 32) as u16,
+            height: (payload >> 48) as u16,
+        };
+        if rect.width == 0 || rect.height == 0 {
+            return Err(invalid_data("damage rectangle is empty"));
+        }
+        Ok(rect)
+    }
+
+    /// Whether the rectangle lies inside a `width` by `height` buffer.
+    pub fn fits(self, width: u32, height: u32) -> bool {
+        u32::from(self.x) + u32::from(self.width) <= width
+            && u32::from(self.y) + u32::from(self.height) <= height
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionMessage {
-    FrameReady { index: u16, sequence: u64 },
-    Key { key: SystemKey, phase: KeyPhase },
+    /// Up to `MAX_FRAME_DAMAGE` of these before a `FrameReady`, sent only to
+    /// a presenter whose swapchain accepts them, name the only parts of that
+    /// frame that differ from the frame before it. A `FrameReady` after none
+    /// may differ anywhere.
+    FrameDamage(DamageRect),
+    FrameReady {
+        index: u16,
+        sequence: u64,
+    },
+    Key {
+        key: SystemKey,
+        phase: KeyPhase,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -144,6 +196,10 @@ pub struct HardwareSwapchain {
     pub pitch: u32,
     pub buffer_size: u64,
     pub buffer_count: u16,
+    /// The presenter accepts `SessionMessage::FrameDamage` and updates only
+    /// the named parts of the panel. A presenter that leaves this clear, as
+    /// every one before it did, needs the whole frame each time.
+    pub frame_damage: bool,
 }
 
 impl HardwareSwapchain {
@@ -216,6 +272,15 @@ impl HardwareSwapchain {
         put_u32(&mut header, 24, info.physical_height);
         put_u32(&mut header, 28, info.format);
         put_u32(&mut header, 32, info.pitch);
+        put_u32(
+            &mut header,
+            36,
+            if info.frame_damage {
+                SWAPCHAIN_FRAME_DAMAGE
+            } else {
+                0
+            },
+        );
         put_u64(&mut header, 40, info.buffer_size);
         Ok(header)
     }
@@ -238,6 +303,7 @@ impl HardwareSwapchain {
             format: get_u32(header, 28),
             pitch: get_u32(header, 32),
             buffer_size: get_u64(header, 40),
+            frame_damage: get_u32(header, 36) & SWAPCHAIN_FRAME_DAMAGE != 0,
         }
         .validate()
     }
@@ -383,6 +449,7 @@ pub fn send_session_message(stream: &mut UnixStream, event: SessionMessage) -> i
         SessionMessage::FrameReady { index, sequence } => {
             WireFields::new(1, u32::from(index), sequence, 0, 0)
         }
+        SessionMessage::FrameDamage(rect) => WireFields::new(9, 0, rect.encode(), 0, 0),
         SessionMessage::Key { key, phase } => WireFields::new(
             8,
             u32::from(key as u16),
@@ -544,6 +611,10 @@ pub fn receive_session_message(stream: &mut UnixStream) -> io::Result<SessionMes
             },
         }),
         8 => Err(invalid_data("unknown system key phase")),
+        9 if fields.value == 0 => Ok(SessionMessage::FrameDamage(DamageRect::decode(
+            fields.payload,
+        )?)),
+        9 => Err(invalid_data("damage message has a nonzero reserved field")),
         _ => Err(invalid_data("message is not valid from a user session")),
     }
 }
@@ -684,7 +755,41 @@ mod tests {
             pitch: 256,
             buffer_size: 256 * 2008,
             buffer_count: 2,
+            frame_damage: true,
         }
+    }
+
+    #[test]
+    fn damage_rectangles_round_trip_and_reject_empty_ones() {
+        let (mut sender, mut receiver) = UnixStream::pair().expect("socket pair");
+        let rect = DamageRect {
+            x: 0,
+            y: 1840,
+            width: 60,
+            height: 168,
+        };
+        send_session_message(&mut sender, SessionMessage::FrameDamage(rect)).unwrap();
+        assert_eq!(
+            receive_session_message(&mut receiver).unwrap(),
+            SessionMessage::FrameDamage(rect)
+        );
+        assert!(rect.fits(60, 2008));
+        assert!(!rect.fits(60, 2007));
+        let empty = SessionMessage::FrameDamage(DamageRect { height: 0, ..rect });
+        send_session_message(&mut sender, empty).unwrap();
+        assert!(receive_session_message(&mut receiver).is_err());
+    }
+
+    #[test]
+    fn a_header_without_the_damage_flag_means_whole_frames() {
+        let whole = HardwareSwapchain {
+            frame_damage: false,
+            ..info()
+        };
+        let mut header = whole.encode().unwrap();
+        assert_eq!(HardwareSwapchain::decode(&header).unwrap(), whole);
+        put_u32(&mut header, 36, SWAPCHAIN_FRAME_DAMAGE);
+        assert_eq!(HardwareSwapchain::decode(&header).unwrap(), info());
     }
 
     #[test]
