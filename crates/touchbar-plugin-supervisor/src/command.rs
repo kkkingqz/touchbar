@@ -47,7 +47,13 @@ const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const TERMINATION_GRACE: Duration = Duration::from_millis(100);
 const MAXIMUM_COMMAND_ADDRESS_SPACE_BYTES: u64 = 1024 * 1024 * 1024;
 const MAXIMUM_COMMAND_OPEN_FILES: u64 = 256;
-const MAXIMUM_ADDITIONAL_USER_PROCESSES: u64 = 32;
+/// Tasks above the user's current count a command may reach. As for component
+/// hosts, `RLIMIT_NPROC` counts every task of the user, so this margin is
+/// shared with everything starting at the same time. At 32 it ran out when a
+/// session started several plugin items together; `wpctl` then could not
+/// start its PipeWire thread and hung until the command's timeout. The
+/// per-command bound is the command cgroup's `pids.max`.
+const MAXIMUM_ADDITIONAL_USER_PROCESSES: u64 = crate::COMPONENT_TASK_MARGIN;
 const CGROUP2_SUPER_MAGIC: libc::c_long = 0x6367_7270;
 const LANDLOCK_CREATE_RULESET_VERSION: u32 = 1;
 const LANDLOCK_RULE_PATH_BENEATH: u32 = 1;
