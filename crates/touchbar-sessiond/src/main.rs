@@ -1939,19 +1939,7 @@ impl State {
                     .map(|(_, x, width)| (*x, *width))
             });
             let Some((x, width)) = placement else {
-                if let Some(surface) = self.surfaces.get_mut(&id) {
-                    let changed = surface.visible;
-                    surface.visible = false;
-                    if changed {
-                        surface.role.visibility(0);
-                        println!(
-                            "visibility plugin={} item={} visible=0",
-                            surface.plugin_id, surface.item_id
-                        );
-                    }
-                    self.gpu.remove_layer(surface.layer_id);
-                    self.scene_dirty = true;
-                }
+                self.hide_surface(&id);
                 continue;
             };
             let geometry = LayerGeometry {
@@ -1994,6 +1982,46 @@ impl State {
         Ok(())
     }
 
+    fn hide_surface(&mut self, id: &ObjectId) {
+        let Some(surface) = self.surfaces.get_mut(id) else {
+            return;
+        };
+        let changed = surface.visible;
+        surface.visible = false;
+        if changed {
+            surface.role.visibility(0);
+            println!(
+                "visibility plugin={} item={} visible=0",
+                surface.plugin_id, surface.item_id
+            );
+        }
+        self.gpu.remove_layer(surface.layer_id);
+        self.scene_dirty = true;
+    }
+
+    /// Hides the compact items an overlay covers, even in part: they would
+    /// show through its gaps and stick out at its edges. The compact
+    /// relayout that ends the presentation shows them again.
+    fn hide_covered(&mut self, x: u32, width: u32, overlay: &[ObjectId]) {
+        let end = x.saturating_add(width);
+        let covered = self
+            .surfaces
+            .iter()
+            .filter(|(id, surface)| {
+                let compact = surface.compact_geometry;
+                surface.kind == SurfaceKind::Item
+                    && surface.visible
+                    && !overlay.contains(id)
+                    && compact.x < end
+                    && x < compact.x.saturating_add(compact.width)
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in covered {
+            self.hide_surface(&id);
+        }
+    }
+
     fn apply_overlay_bar(&mut self, bar: &BarSpec, x: u32, width: u32) -> Result<()> {
         let end = x
             .checked_add(width)
@@ -2002,6 +2030,7 @@ impl State {
             bail!("presentation region exceeds the Touch Bar");
         }
         let layout = resolve(bar, width, &bar_item_ids(bar))?;
+        let mut overlay = Vec::with_capacity(layout.placements.len());
         for placement in &layout.placements {
             let id = self
                 .surfaces
@@ -2041,7 +2070,9 @@ impl State {
                 x + placement.x,
                 placement.width
             );
+            overlay.push(id);
         }
+        self.hide_covered(x, width, &overlay);
         Ok(())
     }
 
@@ -2100,6 +2131,11 @@ impl State {
                             opacity: 1.0,
                             z_index: 1000,
                         },
+                    );
+                    self.hide_covered(
+                        placement.x,
+                        placement.width,
+                        std::slice::from_ref(&presentation.surface),
                     );
                 }
             }
@@ -2161,6 +2197,7 @@ impl State {
                             z_index: 1000,
                         },
                     );
+                    self.hide_covered(x, width, std::slice::from_ref(&presentation.surface));
                 }
             }
             PresentationKind::FullBar => {
