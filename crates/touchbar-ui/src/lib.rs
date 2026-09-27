@@ -661,13 +661,37 @@ impl InteractionMap {
             .copied()
     }
 
-    fn hit_test(&self, point: Point) -> Option<HitTarget> {
-        self.targets
+    /// The topmost target under the point or, when the point misses them
+    /// all, the one vertically nearest among those spanning its column: a
+    /// fingertip covers much of the 60-pixel bar, so a touch just above or
+    /// below a thin slider still means it. The flag is true for the nearest.
+    fn hit_test(&self, point: Point) -> Option<(HitTarget, bool)> {
+        if let Some(target) = self
+            .targets
             .iter()
             .rev()
             .find(|target| target.bounds.contains(point))
-            .copied()
+        {
+            return Some((*target, false));
+        }
+        self.targets
+            .iter()
+            .rev()
+            .filter(|target| spans_column(target.bounds, point))
+            .min_by(|first, second| {
+                vertical_distance(first.bounds, point)
+                    .total_cmp(&vertical_distance(second.bounds, point))
+            })
+            .map(|target| (*target, true))
     }
+}
+
+fn spans_column(bounds: Rect, point: Point) -> bool {
+    point.x >= bounds.x && point.x <= bounds.x + bounds.width
+}
+
+fn vertical_distance(bounds: Rect, point: Point) -> f32 {
+    (bounds.y - point.y).max(point.y - (bounds.y + bounds.height))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -686,8 +710,9 @@ pub struct Contact {
     pub time: Duration,
 }
 
-/// `Activated` is a button released inside its bounds, or a slider released
-/// anywhere after its final `ValueChanged`.
+/// `Activated` is a button released inside its bounds, or in its column if
+/// the touch found it only by column, or a slider released anywhere after
+/// its final `ValueChanged`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum UiEvent {
     Pressed { id: WidgetId },
@@ -701,6 +726,8 @@ pub enum UiEvent {
 #[derive(Clone, Copy, Debug)]
 struct Capture {
     target: HitTarget,
+    /// The touch missed every target and found this one by its column.
+    by_column: bool,
     began: Duration,
     long_press_sent: bool,
 }
@@ -720,13 +747,14 @@ impl InteractionState {
     pub fn handle(&mut self, map: &InteractionMap, contact: Contact) -> Vec<UiEvent> {
         match contact.phase {
             ContactPhase::Down => {
-                let Some(target) = map.hit_test(contact.position) else {
+                let Some((target, by_column)) = map.hit_test(contact.position) else {
                     return Vec::new();
                 };
                 self.captures.insert(
                     contact.id,
                     Capture {
                         target,
+                        by_column,
                         began: contact.time,
                         long_press_sent: false,
                     },
@@ -760,7 +788,9 @@ impl InteractionState {
                     }
                     InteractionKind::Button { .. }
                         if !capture.long_press_sent
-                            && capture.target.bounds.contains(contact.position) =>
+                            && (capture.target.bounds.contains(contact.position)
+                                || capture.by_column
+                                    && spans_column(capture.target.bounds, contact.position)) =>
                     {
                         events.push(UiEvent::Activated {
                             id: capture.target.id,
@@ -2538,6 +2568,74 @@ mod tests {
                 id: WidgetId(2),
                 value: 0.75,
             }]
+        );
+    }
+
+    #[test]
+    fn a_touch_above_or_below_every_target_takes_the_nearest_in_its_column() {
+        let mut map = InteractionMap::default();
+        // A heading label above a thin slider, a button beside them.
+        map.slider(WidgetId(1), Rect::new(0.0, 36.0, 100.0, 12.0));
+        map.button(WidgetId(2), Rect::new(0.0, 52.0, 100.0, 6.0));
+        map.button(WidgetId(3), Rect::new(120.0, 20.0, 40.0, 20.0));
+        let at = |phase, x, y| Contact {
+            id: 1,
+            phase,
+            position: Point::new(x, y),
+            time: Duration::ZERO,
+        };
+        let mut state = InteractionState::default();
+        assert_eq!(
+            state.handle(&map, at(ContactPhase::Down, 25.0, 8.0)),
+            [
+                UiEvent::Pressed { id: WidgetId(1) },
+                UiEvent::ValueChanged {
+                    id: WidgetId(1),
+                    value: 0.25
+                }
+            ]
+        );
+        state.handle(&map, at(ContactPhase::Cancel, 25.0, 8.0));
+        assert_eq!(
+            state.handle(&map, at(ContactPhase::Down, 50.0, 51.0)),
+            [UiEvent::Pressed { id: WidgetId(2) }],
+            "the nearer of two in the column"
+        );
+        assert_eq!(
+            state.handle(&map, at(ContactPhase::Up, 50.0, 40.0)),
+            [
+                UiEvent::Activated { id: WidgetId(2) },
+                UiEvent::Released { id: WidgetId(2) }
+            ],
+            "released in its column"
+        );
+        assert!(
+            state
+                .handle(&map, at(ContactPhase::Down, 110.0, 30.0))
+                .is_empty(),
+            "no target spans the gap"
+        );
+        state.handle(&map, at(ContactPhase::Down, 130.0, 50.0));
+        assert_eq!(
+            state.handle(&map, at(ContactPhase::Up, 170.0, 50.0)),
+            [UiEvent::Released { id: WidgetId(3) }],
+            "released outside its column"
+        );
+    }
+
+    #[test]
+    fn a_button_pressed_inside_does_not_activate_below_it() {
+        let mut map = InteractionMap::default();
+        map.button(WidgetId(1), Rect::new(0.0, 0.0, 50.0, 30.0));
+        let mut state = InteractionState::default();
+        state.handle(&map, contact(1, ContactPhase::Down, 20.0, 0));
+        let up = Contact {
+            position: Point::new(20.0, 50.0),
+            ..contact(1, ContactPhase::Up, 20.0, 10)
+        };
+        assert_eq!(
+            state.handle(&map, up),
+            [UiEvent::Released { id: WidgetId(1) }]
         );
     }
 
