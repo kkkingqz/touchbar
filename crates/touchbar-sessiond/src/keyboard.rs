@@ -15,6 +15,7 @@ use std::{
     collections::HashMap,
     fs,
     io::Write,
+    os::fd::AsRawFd,
     os::unix::fs::OpenOptionsExt,
     path::PathBuf,
     sync::{
@@ -59,11 +60,17 @@ pub struct ShortcutJob {
     pub request_id: u64,
     pub shortcut: KeyboardShortcut,
     pub reply: Seqpacket,
+    /// Rechecks the current grant, cancellation and deadline at the side effect.
+    pub validate: Box<dyn Fn() -> Result<(), ShortcutResult> + Send>,
 }
 
 /// Presses keys in whatever window has the focus. Errors mean the press did
 /// not happen; `Declined` that the user refused the approval.
 pub trait KeyInjector: Send + 'static {
+    /// Completes any blocking desktop approval before authorization is rechecked.
+    fn prepare(&mut self) -> Result<(), InjectError> {
+        Ok(())
+    }
     fn press(&mut self, codes: &[u16]) -> Result<(), InjectError>;
     /// Ends any open session; the next press opens a new one.
     fn close(&mut self);
@@ -127,7 +134,28 @@ fn run(jobs: &Receiver<ShortcutJob>, focus: &FocusedApplication, mut injector: i
                 return;
             }
         };
-        let result = press(&job.shortcut, focus, &mut injector, &mut declined_until);
+        let result = press(
+            &job.shortcut,
+            focus,
+            &mut injector,
+            &mut declined_until,
+            || {
+                (job.validate)()?;
+                let mut descriptor = libc::pollfd {
+                    fd: job.reply.as_raw_fd(),
+                    events: 0,
+                    revents: 0,
+                };
+                // SAFETY: descriptor refers to the job's live reply socket.
+                let result = unsafe { libc::poll(&mut descriptor, 1, 0) };
+                if result < 0
+                    || descriptor.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0
+                {
+                    return Err(ShortcutResult::Unavailable);
+                }
+                Ok(())
+            },
+        );
         println!(
             "shortcut id={} result={result:?} focus={}",
             job.shortcut.id,
@@ -148,7 +176,11 @@ fn press(
     focus: &FocusedApplication,
     injector: &mut impl KeyInjector,
     declined_until: &mut Option<Instant>,
+    validate: impl Fn() -> Result<(), ShortcutResult>,
 ) -> ShortcutResult {
+    if let Err(result) = validate() {
+        return result;
+    }
     if !focus
         .get()
         .is_some_and(|application| shortcut.applications.contains(&application))
@@ -158,6 +190,19 @@ fn press(
     if declined_until.is_some_and(|until| Instant::now() < until) {
         return ShortcutResult::Unavailable;
     }
+    if let Err(error) = injector.prepare() {
+        return injection_error(error, injector, declined_until);
+    }
+    // Approval can outlive the operation or a grant, or focus another window.
+    if let Err(result) = validate() {
+        return result;
+    }
+    if !focus
+        .get()
+        .is_some_and(|application| shortcut.applications.contains(&application))
+    {
+        return ShortcutResult::NotFocused;
+    }
     let codes = shortcut
         .keys
         .iter()
@@ -165,11 +210,21 @@ fn press(
         .collect::<Vec<_>>();
     match injector.press(&codes) {
         Ok(()) => ShortcutResult::Pressed,
-        Err(InjectError::Declined) => {
+        Err(error) => injection_error(error, injector, declined_until),
+    }
+}
+
+fn injection_error(
+    error: InjectError,
+    injector: &mut impl KeyInjector,
+    declined_until: &mut Option<Instant>,
+) -> ShortcutResult {
+    match error {
+        InjectError::Declined => {
             *declined_until = Some(Instant::now() + DECLINED_PAUSE);
             ShortcutResult::Unavailable
         }
-        Err(InjectError::Unavailable(error)) => {
+        InjectError::Unavailable(error) => {
             eprintln!("shortcut-input=unavailable error={error:#}");
             injector.close();
             ShortcutResult::Unavailable
@@ -396,8 +451,14 @@ fn save_token(path: &PathBuf, token: &str) -> Result<()> {
 }
 
 impl KeyInjector for RemoteDesktopPortal {
+    fn prepare(&mut self) -> Result<(), InjectError> {
+        self.open().map(drop)
+    }
+
     fn press(&mut self, codes: &[u16]) -> Result<(), InjectError> {
-        let session = self.open()?;
+        let session = self.session.clone().ok_or_else(|| {
+            InjectError::Unavailable(anyhow::anyhow!("portal session was not prepared"))
+        })?;
         let connection = self.connection().map_err(InjectError::Unavailable)?;
         let key = |code: u16, state: u32| {
             connection.call_method(
@@ -501,6 +562,7 @@ mod tests {
         restore_tokens: Arc<Mutex<Vec<Option<String>>>>,
         starts: Arc<Mutex<u32>>,
         decline: bool,
+        before_start: Option<Box<dyn Fn() + Send + Sync>>,
     }
 
     async fn respond(
@@ -573,6 +635,9 @@ mod tests {
             #[zbus(header)] header: zbus::message::Header<'_>,
             #[zbus(connection)] connection: &zbus::Connection,
         ) -> zbus::fdo::Result<OwnedObjectPath> {
+            if let Some(before_start) = &self.before_start {
+                before_start();
+            }
             if self.decline {
                 return respond(connection, &header, &options, 1, HashMap::new()).await;
             }
@@ -606,6 +671,14 @@ mod tests {
     }
 
     fn portal(bus: &PrivateBus, decline: bool) -> (Connection, FakePortalLog) {
+        portal_with_start(bus, decline, None)
+    }
+
+    fn portal_with_start(
+        bus: &PrivateBus,
+        decline: bool,
+        before_start: Option<Box<dyn Fn() + Send + Sync>>,
+    ) -> (Connection, FakePortalLog) {
         let log = FakePortalLog::default();
         let connection = zbus::blocking::connection::Builder::address(bus.address.as_str())
             .unwrap()
@@ -618,6 +691,7 @@ mod tests {
                     restore_tokens: Arc::clone(&log.restore_tokens),
                     starts: Arc::default(),
                     decline,
+                    before_start,
                 },
             )
             .unwrap()
@@ -633,12 +707,33 @@ mod tests {
     }
 
     #[test]
+    fn a_focus_change_during_portal_approval_presses_nothing() {
+        let bus = PrivateBus::start();
+        let focus = FocusedApplication::default();
+        focus.set(Some("firefox_firefox".into()));
+        let approval_focus = focus.clone();
+        let (_portal, log) = portal_with_start(
+            &bus,
+            false,
+            Some(Box::new(move || {
+                approval_focus.set(Some("org.gnome.ptyxis".into()));
+            })),
+        );
+        let mut injector =
+            RemoteDesktopPortal::with_connection(bus.connect(), bus.file("remote-desktop.token"));
+        let result = press(&back(), &focus, &mut injector, &mut None, || Ok(()));
+        assert_eq!(result, ShortcutResult::NotFocused);
+        assert!(log.keys.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn the_portal_presses_in_order_and_keeps_the_approval() {
         let bus = PrivateBus::start();
         let (_portal, log) = portal(&bus, false);
         let token_path = bus.file("remote-desktop.token");
         let mut injector = RemoteDesktopPortal::with_connection(bus.connect(), token_path.clone());
 
+        injector.prepare().unwrap();
         injector.press(&[56, 105]).unwrap();
         assert_eq!(
             *log.keys.lock().unwrap(),
@@ -652,6 +747,7 @@ mod tests {
 
         // After the idle close, the next session restores the approval.
         injector.close();
+        injector.prepare().unwrap();
         injector.press(&[29, 48]).unwrap();
         assert_eq!(
             *log.restore_tokens.lock().unwrap(),
@@ -666,10 +762,7 @@ mod tests {
         let (_portal, log) = portal(&bus, true);
         let mut injector =
             RemoteDesktopPortal::with_connection(bus.connect(), bus.file("remote-desktop.token"));
-        assert!(matches!(
-            injector.press(&[56, 105]),
-            Err(InjectError::Declined)
-        ));
+        assert!(matches!(injector.prepare(), Err(InjectError::Declined)));
         assert!(log.keys.lock().unwrap().is_empty());
     }
 
@@ -684,6 +777,7 @@ mod tests {
                 request_id,
                 shortcut: back(),
                 reply: daemon.try_clone().unwrap(),
+                validate: Box::new(|| Ok(())),
             });
             outcome(&supervisor)
         };
@@ -712,16 +806,41 @@ mod tests {
         };
         let mut declined_until = None;
         assert_eq!(
-            press(&back(), &focus, &mut recorder, &mut declined_until),
+            press(&back(), &focus, &mut recorder, &mut declined_until, || Ok(
+                ()
+            )),
             ShortcutResult::Unavailable
         );
         assert!(declined_until.is_some());
         recorder.decline = false;
         assert_eq!(
-            press(&back(), &focus, &mut recorder, &mut declined_until),
+            press(&back(), &focus, &mut recorder, &mut declined_until, || Ok(
+                ()
+            )),
             ShortcutResult::Unavailable,
             "no second dialog right after a refusal"
         );
+        assert!(recorder.presses.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_disconnected_supervisor_cannot_press_a_queued_shortcut() {
+        let focus = FocusedApplication::default();
+        focus.set(Some("firefox_firefox".into()));
+        let recorder = Recorder::default();
+        let (daemon, supervisor) = Seqpacket::pair().unwrap();
+        let (submit, jobs) = mpsc::channel();
+        submit
+            .send(ShortcutJob {
+                request_id: 1,
+                shortcut: back(),
+                reply: daemon,
+                validate: Box::new(|| Ok(())),
+            })
+            .unwrap();
+        drop(supervisor);
+        drop(submit);
+        run(&jobs, &focus, recorder.clone());
         assert!(recorder.presses.lock().unwrap().is_empty());
     }
 }

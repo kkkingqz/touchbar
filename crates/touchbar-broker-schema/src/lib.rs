@@ -47,7 +47,8 @@ const MEDIA_STATE_MAGIC: [u8; 8] = *b"OMMEDST1";
 const MEDIA_OPENED_MAGIC: [u8; 8] = *b"OMMEDOP1";
 const MEDIA_COMMAND_MAGIC: [u8; 8] = *b"OMMEDCM1";
 const SHORTCUT_REQUEST_MAGIC: [u8; 8] = *b"OMKEYRQ1";
-const SHORTCUT_DISPATCH_MAGIC: [u8; 8] = *b"OMKEYDS1";
+const SHORTCUT_DISPATCH_MAGIC: [u8; 8] = *b"OMKEYDS2";
+const SHORTCUT_CANCEL_MAGIC: [u8; 8] = *b"OMKEYCN1";
 const SHORTCUT_OUTCOME_MAGIC: [u8; 8] = *b"OMKEYOC1";
 const HTTP_REQUEST_MAGIC: [u8; 8] = *b"OMHTTPQ1";
 const HTTP_RESPONSE_MAGIC: [u8; 8] = *b"OMHTTPR1";
@@ -376,13 +377,18 @@ impl KeyboardShortcutRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ShortcutDispatch {
     pub request_id: u64,
+    pub deadline_monotonic_micros: u64,
     pub shortcut: String,
 }
 
 impl ShortcutDispatch {
     pub fn encode(&self) -> Result<Vec<u8>, SchemaError> {
+        if self.request_id == 0 || self.deadline_monotonic_micros == 0 {
+            return Err(SchemaError::Malformed);
+        }
         let mut encoder = Encoder::new(SHORTCUT_DISPATCH_MAGIC);
         encoder.u64(self.request_id);
+        encoder.u64(self.deadline_monotonic_micros);
         encode_shortcut_id(&mut encoder, &self.shortcut)?;
         encoder.finish()
     }
@@ -390,12 +396,44 @@ impl ShortcutDispatch {
     pub fn decode(bytes: &[u8]) -> Result<Self, SchemaError> {
         let mut decoder = Decoder::new(bytes, SHORTCUT_DISPATCH_MAGIC)?;
         let request_id = decoder.u64()?;
+        let deadline_monotonic_micros = decoder.u64()?;
+        if request_id == 0 || deadline_monotonic_micros == 0 {
+            return Err(SchemaError::Malformed);
+        }
         let shortcut = decode_shortcut_id(&mut decoder)?;
         decoder.finish()?;
         Ok(Self {
             request_id,
+            deadline_monotonic_micros,
             shortcut,
         })
+    }
+}
+
+/// Withdraws one dispatch when its supervisor operation ends before a press.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ShortcutCancel {
+    pub request_id: u64,
+}
+
+impl ShortcutCancel {
+    pub fn encode(&self) -> Result<Vec<u8>, SchemaError> {
+        if self.request_id == 0 {
+            return Err(SchemaError::Malformed);
+        }
+        let mut encoder = Encoder::new(SHORTCUT_CANCEL_MAGIC);
+        encoder.u64(self.request_id);
+        encoder.finish()
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, SchemaError> {
+        let mut decoder = Decoder::new(bytes, SHORTCUT_CANCEL_MAGIC)?;
+        let request_id = decoder.u64()?;
+        decoder.finish()?;
+        if request_id == 0 {
+            return Err(SchemaError::Malformed);
+        }
+        Ok(Self { request_id })
     }
 }
 
@@ -2796,6 +2834,7 @@ mod tests {
         );
         let dispatch = ShortcutDispatch {
             request_id: 7,
+            deadline_monotonic_micros: 11,
             shortcut: "bold".into(),
         };
         assert_eq!(
@@ -2828,6 +2867,35 @@ mod tests {
             );
         }
         assert!(KeyboardShortcutRequest::decode(&dispatch.encode().unwrap()).is_err());
+    }
+
+    #[test]
+    fn shortcut_cancellation_and_deadlines_are_strictly_encoded() {
+        let cancel = ShortcutCancel { request_id: 7 };
+        let payload = cancel.encode().unwrap();
+        assert_eq!(ShortcutCancel::decode(&payload).unwrap(), cancel);
+        assert!(ShortcutDispatch::decode(&payload).is_err());
+        assert!(ShortcutCancel { request_id: 0 }.encode().is_err());
+        for length in 0..payload.len() {
+            assert!(ShortcutCancel::decode(&payload[..length]).is_err());
+        }
+        let mut trailing = payload.clone();
+        trailing.push(0);
+        assert!(ShortcutCancel::decode(&trailing).is_err());
+        let mut zero_id = payload;
+        zero_id[8..16].fill(0);
+        assert!(ShortcutCancel::decode(&zero_id).is_err());
+        for (request_id, deadline_monotonic_micros) in [(0, 1), (1, 0)] {
+            assert!(
+                ShortcutDispatch {
+                    request_id,
+                    deadline_monotonic_micros,
+                    shortcut: "back".into(),
+                }
+                .encode()
+                .is_err()
+            );
+        }
     }
 
     fn exercise_all_decoders(bytes: &[u8]) {
@@ -2877,6 +2945,10 @@ mod tests {
         let _ = MediaState::decode(bytes);
         let _ = MediaSubscriptionOpened::decode(bytes);
         let _ = MediaCommand::decode(bytes);
+        let _ = KeyboardShortcutRequest::decode(bytes);
+        let _ = ShortcutDispatch::decode(bytes);
+        let _ = ShortcutCancel::decode(bytes);
+        let _ = ShortcutOutcome::decode(bytes);
     }
 
     #[test]
@@ -2928,6 +3000,10 @@ mod tests {
             MEDIA_STATE_MAGIC,
             MEDIA_OPENED_MAGIC,
             MEDIA_COMMAND_MAGIC,
+            SHORTCUT_REQUEST_MAGIC,
+            SHORTCUT_DISPATCH_MAGIC,
+            SHORTCUT_CANCEL_MAGIC,
+            SHORTCUT_OUTCOME_MAGIC,
         ];
         let mut random = 0x9e37_79b9_7f4a_7c15_u64;
         for index in 0..4096 {

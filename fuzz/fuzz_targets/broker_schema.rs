@@ -4,6 +4,10 @@ use libfuzzer_sys::fuzz_target;
 use touchbar_broker_schema::*;
 
 fuzz_target!(|bytes: &[u8]| {
+    let _ = KeyboardShortcutRequest::decode(bytes);
+    let _ = ShortcutDispatch::decode(bytes);
+    let _ = ShortcutCancel::decode(bytes);
+    let _ = ShortcutOutcome::decode(bytes);
     let _ = ContextReadRequest::decode(bytes);
     let _ = ContextSnapshot::decode(bytes);
     let _ = ContextSubscriptionOpened::decode(bytes);

@@ -783,6 +783,9 @@ impl GpuCompositor {
 
         if let Some(layer) = self.layers.get_mut(&layer_id) {
             layer.ready = true;
+            // The current texture no longer describes the last RGBA upload.
+            // A later SHM commit must damage the layer even if those bytes match.
+            layer.pixels = None;
         }
         match previous {
             // Plugins commit whole frames, often unchanged ones; only the
@@ -1540,7 +1543,8 @@ mod tests {
     };
 
     use super::{
-        ColumnSpans, SYNC_IOC_FILE_INFO, changed_columns, preferred_render_node, validate_sync_file,
+        ColumnSpans, GpuCompositor, LayerGeometry, SYNC_IOC_FILE_INFO, changed_columns,
+        preferred_render_node, select_render_node, validate_sync_file,
     };
 
     #[test]
@@ -1577,6 +1581,123 @@ mod tests {
         next[row_two + 7 * 4 + 2] = 9; // row 2, column 7, the last
         assert_eq!(changed_columns(&previous, &next, width), [(1, 3), (6, 8)]);
         assert!(changed_columns(&previous, &previous, width).is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires a DRM render node and EGL_MESA_image_dma_buf_export"]
+    fn rgba_after_a_dmabuf_commit_damages_the_changed_layer() {
+        let node = select_render_node().unwrap();
+        let mut gpu = GpuCompositor::new(8, 2, &node).unwrap();
+        let geometry = LayerGeometry {
+            x: 2,
+            width: 3,
+            height: 2,
+            opacity: 1.0,
+            z_index: 0,
+        };
+        let black = [0, 0, 0, 255].repeat(6);
+        let white = [255, 255, 255, 255].repeat(6);
+        gpu.update_rgba_layer(2, geometry, &white).unwrap();
+        let dmabuf = export_layer_dmabuf(&gpu, 2);
+        gpu.remove_layer(2);
+
+        gpu.update_rgba_layer(1, geometry, &black).unwrap();
+        gpu.take_output_damage();
+        let completion = gpu.update_dmabuf_layer(1, geometry, &dmabuf).unwrap();
+        gpu.finish();
+        gpu.destroy_completion(completion);
+        gpu.compose_scene();
+        assert_eq!(&gpu.scene_pixels()[8..12], &[255, 255, 255, 255]);
+        gpu.take_output_damage();
+
+        // Returning to the same RGBA bytes still changes white to black.
+        gpu.update_rgba_layer(1, geometry, &black).unwrap();
+        assert_eq!(gpu.damage.spans, [(2, 5)]);
+        gpu.compose_scene();
+        assert_eq!(&gpu.scene_pixels()[8..12], &[0, 0, 0, 255]);
+    }
+
+    fn export_layer_dmabuf(gpu: &GpuCompositor, id: u64) -> crate::DmabufBufferData {
+        use std::{ffi::c_void, mem};
+
+        use khronos_egl as egl;
+
+        type Query = unsafe extern "system" fn(
+            *mut c_void,
+            *mut c_void,
+            *mut egl::Int,
+            *mut egl::Int,
+            *mut u64,
+        ) -> egl::Boolean;
+        type Export = unsafe extern "system" fn(
+            *mut c_void,
+            *mut c_void,
+            *mut egl::Int,
+            *mut egl::Int,
+            *mut egl::Int,
+        ) -> egl::Boolean;
+
+        let layer = &gpu.layers[&id];
+        // SAFETY: the texture belongs to the current EGL context, and both
+        // extension addresses are cast to their specified signatures.
+        unsafe {
+            let image = gpu
+                .egl
+                .create_image(
+                    gpu.display,
+                    gpu.context,
+                    0x30b1, // EGL_GL_TEXTURE_2D
+                    egl::ClientBuffer::from_ptr(layer.texture.0.get() as usize as *mut c_void),
+                    &[egl::ATTRIB_NONE],
+                )
+                .unwrap();
+            let query = mem::transmute::<unsafe extern "system" fn(), Query>(
+                gpu.egl
+                    .get_proc_address("eglExportDMABUFImageQueryMESA")
+                    .unwrap(),
+            );
+            let export = mem::transmute::<unsafe extern "system" fn(), Export>(
+                gpu.egl
+                    .get_proc_address("eglExportDMABUFImageMESA")
+                    .unwrap(),
+            );
+            let (mut format, mut planes, mut modifiers) = (0, 0, [0; 4]);
+            assert_eq!(
+                query(
+                    gpu.display.as_ptr(),
+                    image.as_ptr(),
+                    &mut format,
+                    &mut planes,
+                    modifiers.as_mut_ptr()
+                ),
+                egl::TRUE
+            );
+            assert_eq!(planes, 1);
+            let (mut fd, mut stride, mut offset) = (-1, 0, 0);
+            assert_eq!(
+                export(
+                    gpu.display.as_ptr(),
+                    image.as_ptr(),
+                    &mut fd,
+                    &mut stride,
+                    &mut offset
+                ),
+                egl::TRUE
+            );
+            gpu.egl.destroy_image(gpu.display, image).unwrap();
+            crate::DmabufBufferData {
+                width: layer.geometry.width,
+                height: layer.geometry.height,
+                format: format as u32,
+                y_invert: false,
+                planes: vec![crate::DmabufPlane {
+                    fd: OwnedFd::from_raw_fd(fd),
+                    offset: offset as u32,
+                    stride: stride as u32,
+                    modifier: modifiers[0],
+                }],
+            }
+        }
     }
 
     #[test]

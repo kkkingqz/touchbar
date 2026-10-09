@@ -136,9 +136,10 @@ activated() {
 }
 
 cmd_native() {
-    # The sleep hook must reach native mode before the kernel suspends even if a
-    # display switch still holds the lock; that switch loses the race at worst.
-    take_lock || log "WARNING: a display switch still holds the lock; switching anyway"
+    if ! take_lock; then
+        log "ERROR: another mode switch did not finish within 60 s"
+        return 1
+    fi
     # touchbard must let go of the DRM card and digitizer before their drivers unbind.
     systemctl stop touchbar.service 2>/dev/null || true
     local device
@@ -179,11 +180,21 @@ cmd_display() {
             log "Touch Bar did not appear within 30 s"
             return 1
         fi
+        # The marker may disappear while discovery waits (rollback), or the
+        # sleep hook may start. Do not change USB configuration in either case.
+        if ! activated || sleep_in_progress; then
+            log "display switch cancelled before selecting the configuration"
+            return 0
+        fi
         # A modprobe.d blacklist only stops alias autoloading; loading by name still works,
         # so appletbdrm can stay blacklisted for everything but this switch.
         modprobe appletbdrm || log "WARNING: could not load appletbdrm"
         if set_config "$device" 2 "$force" && wait_until 10 display_ready "$device"; then
             udevadm settle --timeout=5 || true
+            if ! activated || sleep_in_progress; then
+                log "display switch cancelled before starting touchbard"
+                return 0
+            fi
             # udev starts touchbar.service when the card appears; this covers a lost event.
             systemctl --no-block start touchbar.service || true
             log "display mode ready"
@@ -194,7 +205,7 @@ cmd_display() {
         log "display configuration did not come up (attempt $attempt)"
     done
     # Never leave the strip dark: fall back to the function row the T2 draws itself.
-    if device=$(find_device); then
+    if activated && ! sleep_in_progress && device=$(find_device); then
         set_config "$device" 1 || true
     fi
     log "ERROR: display mode failed; left the Touch Bar in native mode"

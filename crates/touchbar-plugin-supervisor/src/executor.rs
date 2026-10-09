@@ -98,6 +98,11 @@ impl CancellationToken {
         self.reason().is_some()
     }
 
+    /// The remaining operation lifetime, including time spent waiting in a queue.
+    pub fn remaining(&self) -> Duration {
+        self.deadline.saturating_duration_since(Instant::now())
+    }
+
     pub fn reason(&self) -> Option<BrokerErrorCode> {
         if self.cancelled.load(Ordering::Acquire) {
             Some(BrokerErrorCode::Cancelled)

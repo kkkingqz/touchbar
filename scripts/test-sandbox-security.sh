@@ -5,6 +5,7 @@ project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 fuzz_seconds=${FUZZ_SECONDS:-0}
 
 cd "$project_dir"
+python3 scripts/test-t2-rollback.py
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --quiet

@@ -15,9 +15,25 @@ case "$action" in
         ;;
 esac
 
+readonly admin_lock=/run/touchbar-service-admin.lock
+
+take_admin_lock() {
+    exec 8>"$admin_lock"
+    flock --timeout 120 8
+}
+
+# Activation has work after the mode helper returns, including a daemon start.
+# Serialize the whole action with rollback; the mode helpers only use fd 9's
+# separate lock, so they can run while this administrative lock is held.
+if ! take_admin_lock; then
+    echo "another TouchBar activation or rollback did not finish within 120 s" >&2
+    exit 1
+fi
+
 hardware_unit=/usr/lib/systemd/system/touchbar.service
 hardware_binary=/usr/lib/touchbar/touchbard
 t2_mode=/usr/lib/touchbar/touchbar-t2-mode
+t2_lock=/run/touchbar-t2-mode.lock
 t2_units=(touchbar-t2-display.service touchbar-t2-sleep.service)
 
 tiny_dfr_installed() {
@@ -76,6 +92,9 @@ hand_back() {
             systemctl is-active --quiet tiny-dfr.service
             ;;
         t2-native)
+            # The native helper acquires the same lock itself. Display callers
+            # waiting for it will re-check the now absent activation marker.
+            exec 9>&-
             "$t2_mode" native
             ;;
     esac
@@ -87,6 +106,17 @@ release_hardware() {
     # The T2 units are disabled unconditionally; that is harmless where they
     # were never enabled.
     systemctl disable "${t2_units[@]}" 2>/dev/null || true
+    if [[ $t2 == true ]]; then
+        # ExecStop on the sleep hook queues a display restart. Stop that hook
+        # first, then drain the display unit, with the marker already absent.
+        # A failed stop must never permit another owner to be started.
+        systemctl stop touchbar-t2-sleep.service || return 1
+        systemctl stop touchbar-t2-display.service || return 1
+        # Direct invocations are outside the display unit's cgroup. Drain them
+        # too, and keep the lock through hardware shutdown and tiny-dfr handback.
+        exec 9>"$t2_lock"
+        flock --timeout 60 9 || return 1
+    fi
     systemctl stop touchbar.service 2>/dev/null || true
 }
 
@@ -139,11 +169,10 @@ restore_fallback() {
     status=${1:-1}
     trap - EXIT INT TERM HUP
     if [[ $status -ne 0 ]]; then
-        release_hardware
-        if wait_hardware_stopped; then
+        if release_hardware && wait_hardware_stopped; then
             hand_back 2>/dev/null || status=1
         else
-            echo "WARNING: $fallback was not restored because touchbard did not stop" >&2
+            echo "WARNING: $fallback was not restored because hardware ownership could not be released" >&2
             status=1
         fi
     fi

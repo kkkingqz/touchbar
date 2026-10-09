@@ -3,12 +3,16 @@ use std::{
     os::{fd::AsRawFd, unix::process::CommandExt},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
 use touchbar_broker_schema::AppearancePublish;
-use touchbar_broker_schema::{ShortcutDispatch, ShortcutOutcome, ShortcutResult};
+use touchbar_broker_schema::{ShortcutCancel, ShortcutDispatch, ShortcutOutcome, ShortcutResult};
 use touchbar_control::ProcessStatus;
 use touchbar_package::{
     AppearanceProvider, AutomaticProfile, GithubSource, PluginManifest, PresentationBar,
@@ -27,7 +31,7 @@ use touchbar_profile_config::{
     ProfileElementConfig, ProfileItemConfig, ProfileItemRefConfig, ProfileRuleConfig, ScopeConfig,
     SlotPolicyConfig,
 };
-use touchbar_protocol::broker_ipc::Seqpacket;
+use touchbar_protocol::broker_ipc::{Seqpacket, monotonic_micros};
 
 use crate::{appearance::ProviderIdentity, keyboard::ShortcutJob};
 
@@ -128,10 +132,20 @@ struct Managed {
     permission_blocked: bool,
     appearance_channel: Option<Seqpacket>,
     shortcut_channel: Option<Seqpacket>,
+    pending_shortcuts: BTreeMap<u64, Weak<AtomicBool>>,
 }
 
 impl Managed {
+    fn cancel_shortcuts(&mut self) {
+        for flag in std::mem::take(&mut self.pending_shortcuts).into_values() {
+            if let Some(flag) = flag.upgrade() {
+                flag.store(true, Ordering::Release);
+            }
+        }
+    }
+
     fn record_failure(&mut self, detail: String, now: Instant) {
+        self.cancel_shortcuts();
         self.child = None;
         self.appearance_channel = None;
         self.shortcut_channel = None;
@@ -163,6 +177,12 @@ impl Managed {
         } else {
             UnavailableReason::Restarting
         }
+    }
+}
+
+impl Drop for Managed {
+    fn drop(&mut self) {
+        self.cancel_shortcuts();
     }
 }
 
@@ -647,9 +667,12 @@ impl PluginManager {
                     .is_some_and(|child| child.try_wait().ok().flatten().is_none())
             {
                 self.processes.insert(key, process);
-            } else if let Some(mut child) = process.child.take() {
-                let _ = child.kill();
-                let _ = child.wait();
+            } else {
+                process.cancel_shortcuts();
+                if let Some(mut child) = process.child.take() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
             }
         }
         for (key, desired) in desired {
@@ -666,6 +689,7 @@ impl PluginManager {
                 permission_blocked: false,
                 appearance_channel: None,
                 shortcut_channel: None,
+                pending_shortcuts: BTreeMap::new(),
             };
             start(
                 &self.supervisor,
@@ -811,6 +835,9 @@ impl PluginManager {
         let mut jobs = Vec::new();
         let mut grants = None;
         for process in self.processes.values_mut() {
+            process
+                .pending_shortcuts
+                .retain(|_, flag| flag.strong_count() != 0);
             let Some(channel) = &process.shortcut_channel else {
                 continue;
             };
@@ -818,10 +845,24 @@ impl PluginManager {
                 let Ok(Some(payload)) = channel.try_recv_payload() else {
                     break;
                 };
+                if let Ok(cancel) = ShortcutCancel::decode(&payload) {
+                    if let Some(flag) = process
+                        .pending_shortcuts
+                        .remove(&cancel.request_id)
+                        .and_then(|flag| flag.upgrade())
+                    {
+                        flag.store(true, Ordering::Release);
+                    }
+                    continue;
+                }
                 let Ok(dispatch) = ShortcutDispatch::decode(&payload) else {
                     process.detail = Some("supervisor sent a malformed shortcut".into());
                     continue;
                 };
+                if process.pending_shortcuts.contains_key(&dispatch.request_id) {
+                    process.detail = Some("supervisor reused an active shortcut request".into());
+                    continue;
+                }
                 let (grants, session) = grants.get_or_insert_with(|| {
                     let grants = GrantStore::load(&self.paths.grants).unwrap_or_default();
                     let session = GrantStore::load(&self.paths.session_grants)
@@ -837,11 +878,54 @@ impl PluginManager {
                     continue;
                 };
                 match shortcut {
-                    Some(shortcut) => jobs.push(ShortcutJob {
-                        request_id: dispatch.request_id,
-                        shortcut,
-                        reply,
-                    }),
+                    Some(shortcut) => {
+                        let cancelled = Arc::new(AtomicBool::new(false));
+                        process
+                            .pending_shortcuts
+                            .insert(dispatch.request_id, Arc::downgrade(&cancelled));
+                        let policy = process
+                            .desired
+                            .policy
+                            .clone()
+                            .expect("granted shortcut has a policy");
+                        let paths = self.paths.clone();
+                        let expected = shortcut.clone();
+                        jobs.push(ShortcutJob {
+                            request_id: dispatch.request_id,
+                            shortcut,
+                            reply,
+                            validate: Box::new(move || {
+                                let check_lifetime = || {
+                                    if cancelled.load(Ordering::Acquire)
+                                        || monotonic_micros().map_or(true, |now| {
+                                            now >= dispatch.deadline_monotonic_micros
+                                        })
+                                    {
+                                        Err(ShortcutResult::Unavailable)
+                                    } else {
+                                        Ok(())
+                                    }
+                                };
+                                check_lifetime()?;
+                                let grants = GrantStore::load(&paths.grants).unwrap_or_default();
+                                let session = GrantStore::load(&paths.session_grants)
+                                    .ok()
+                                    .and_then(|store| {
+                                        SessionGrants::from_records(store.records()).ok()
+                                    })
+                                    .unwrap_or_default();
+                                if granted_shortcut(&policy, &grants, &session, &dispatch.shortcut)
+                                    .as_ref()
+                                    != Some(&expected)
+                                {
+                                    return Err(ShortcutResult::NotGranted);
+                                }
+                                // Loading policy can take time too; do not press an
+                                // operation cancelled or expired during that read.
+                                check_lifetime()
+                            }),
+                        });
+                    }
                     None => {
                         let outcome = ShortcutOutcome {
                             request_id: dispatch.request_id,
@@ -935,6 +1019,7 @@ pub struct ProviderPublication {
 impl Drop for PluginManager {
     fn drop(&mut self) {
         for process in self.processes.values_mut() {
+            process.cancel_shortcuts();
             if let Some(mut child) = process.child.take() {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -1382,6 +1467,7 @@ mod tests {
             permission_blocked: false,
             appearance_channel: None,
             shortcut_channel: None,
+            pending_shortcuts: BTreeMap::new(),
         }
     }
 
@@ -1617,6 +1703,206 @@ activities = ["theme-change"]
             None,
             "a supervisor cannot name a shortcut the user never saw"
         );
+    }
+
+    fn queued_shortcut(
+        deadline_monotonic_micros: u64,
+    ) -> (
+        PluginManager,
+        Seqpacket,
+        ShortcutJob,
+        GrantRecord,
+        tempfile::TempDir,
+    ) {
+        let manifest = PluginManifest::from_toml(include_str!(
+            "../../../plugins/app-actions/touchbar-plugin.toml"
+        ))
+        .unwrap();
+        let requests = CapabilityRegistry::default().normalize(&manifest).unwrap();
+        let policy = PolicyInput {
+            package: PackageInstance {
+                source: manifest.plugin.source.clone(),
+                version: manifest.plugin.version.clone(),
+                digest: format!("sha256:{}", "a".repeat(64)),
+                provenance: Provenance::LocalDevelopment,
+                runtime: RuntimeKind::Component,
+            },
+            requests: requests.clone(),
+        };
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let paths = StorePaths::under(root.path().to_path_buf());
+        let request = requests
+            .iter()
+            .find(|request| request.capability == CapabilityId::KeyboardShortcutV1)
+            .unwrap();
+        let record = GrantRecord {
+            source: policy.package.source.clone(),
+            capability: request.capability.clone(),
+            approved_scope: request.scope.clone(),
+            bindings: GrantBindings::default(),
+            decision: Decision::Allow,
+            reuse: ReusePolicy::ExactDigest,
+            approved_version: policy.package.version.clone(),
+            approved_digest: policy.package.digest.clone(),
+        };
+        GrantStore::update_record(&paths.grants, record.clone()).unwrap();
+        let (daemon, supervisor) = Seqpacket::pair().unwrap();
+        let mut process = managed();
+        process.desired.policy = Some(policy);
+        process.shortcut_channel = Some(daemon);
+        let mut manager = PluginManager {
+            paths: paths.clone(),
+            supervisor: "/unused".into(),
+            host: "/unused".into(),
+            wayland_display: "unused".into(),
+            processes: BTreeMap::from([(process.desired.key.clone(), process)]),
+            presentations: PresentationCatalog::default(),
+            profiles: PackagedProfileCatalog::default(),
+            appearance_providers: AppearanceProviderCatalog::default(),
+            next_policy_refresh: Instant::now(),
+            trusted_components: false,
+        };
+        supervisor
+            .send_payload(
+                &ShortcutDispatch {
+                    request_id: 1,
+                    deadline_monotonic_micros,
+                    shortcut: "back".into(),
+                }
+                .encode()
+                .unwrap(),
+            )
+            .unwrap();
+        let job = manager
+            .poll_shortcuts()
+            .pop()
+            .expect("granted shortcut queued");
+        (manager, supervisor, job, record, root)
+    }
+
+    fn assert_shortcut_result(
+        job: ShortcutJob,
+        supervisor: &Seqpacket,
+        before_press: Option<Box<dyn FnOnce() + Send>>,
+        expected: ShortcutResult,
+    ) {
+        use crate::keyboard::{FocusedApplication, InjectError, KeyInjector, ShortcutPresser};
+        use std::sync::Mutex;
+
+        struct Recorder {
+            presses: Arc<Mutex<Vec<Vec<u16>>>>,
+            prepare: Option<Box<dyn FnOnce() + Send>>,
+        }
+        impl KeyInjector for Recorder {
+            fn prepare(&mut self) -> Result<(), InjectError> {
+                if let Some(prepare) = self.prepare.take() {
+                    prepare();
+                }
+                Ok(())
+            }
+            fn press(&mut self, codes: &[u16]) -> Result<(), InjectError> {
+                self.presses.lock().unwrap().push(codes.to_vec());
+                Ok(())
+            }
+            fn close(&mut self) {}
+        }
+        let focus = FocusedApplication::default();
+        focus.set(Some("firefox_firefox".into()));
+        let presses = Arc::new(Mutex::new(Vec::new()));
+        let presser = ShortcutPresser::start(
+            focus,
+            Recorder {
+                presses: presses.clone(),
+                prepare: before_press,
+            },
+        )
+        .unwrap();
+        presser.submit(job);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let outcome = loop {
+            if let Some(payload) = supervisor.try_recv_payload().unwrap() {
+                break ShortcutOutcome::decode(&payload).unwrap();
+            }
+            assert!(Instant::now() < deadline, "shortcut worker did not answer");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(outcome.result, expected);
+        if expected == ShortcutResult::Pressed {
+            assert_eq!(*presses.lock().unwrap(), [vec![56, 105]]);
+        } else {
+            assert!(presses.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_queued_shortcut_does_not_survive_grant_revocation() {
+        let (manager, supervisor, job, mut record, _root) =
+            queued_shortcut(monotonic_micros().unwrap() + 5_000_000);
+        record.decision = Decision::Deny;
+        GrantStore::update_record(&manager.paths.grants, record).unwrap();
+        assert_shortcut_result(job, &supervisor, None, ShortcutResult::NotGranted);
+    }
+
+    #[test]
+    fn a_shortcut_rechecks_its_grant_after_portal_approval() {
+        let (manager, supervisor, job, mut record, _root) =
+            queued_shortcut(monotonic_micros().unwrap() + 5_000_000);
+        let path = manager.paths.grants.clone();
+        assert_shortcut_result(
+            job,
+            &supervisor,
+            Some(Box::new(move || {
+                record.decision = Decision::Deny;
+                GrantStore::update_record(&path, record).unwrap();
+            })),
+            ShortcutResult::NotGranted,
+        );
+    }
+
+    #[test]
+    fn cancellation_during_portal_approval_prevents_the_press() {
+        let (mut manager, supervisor, job, _record, _root) =
+            queued_shortcut(monotonic_micros().unwrap() + 5_000_000);
+        let cancellation = supervisor.try_clone().unwrap();
+        assert_shortcut_result(
+            job,
+            &supervisor,
+            Some(Box::new(move || {
+                cancellation
+                    .send_payload(&ShortcutCancel { request_id: 1 }.encode().unwrap())
+                    .unwrap();
+                assert!(manager.poll_shortcuts().is_empty());
+            })),
+            ShortcutResult::Unavailable,
+        );
+    }
+
+    #[test]
+    fn stopping_the_plugin_during_approval_prevents_the_press() {
+        let (mut manager, supervisor, job, _record, _root) =
+            queued_shortcut(monotonic_micros().unwrap() + 5_000_000);
+        assert_shortcut_result(
+            job,
+            &supervisor,
+            Some(Box::new(move || {
+                manager.processes.clear();
+            })),
+            ShortcutResult::Unavailable,
+        );
+    }
+
+    #[test]
+    fn an_expired_shortcut_is_not_pressed() {
+        let (_manager, supervisor, job, _record, _root) = queued_shortcut(1);
+        assert_shortcut_result(job, &supervisor, None, ShortcutResult::Unavailable);
+    }
+
+    #[test]
+    fn a_current_granted_shortcut_is_pressed() {
+        let (_manager, supervisor, job, _record, _root) =
+            queued_shortcut(monotonic_micros().unwrap() + 5_000_000);
+        assert_shortcut_result(job, &supervisor, None, ShortcutResult::Pressed);
     }
 
     #[test]

@@ -82,7 +82,8 @@ in LibreOffice, each with volume and brightness sliders.
   LibreOffice. It uses the new `keyboard.shortcut.v1` capability: each grant
   is a fixed chord for named applications, every press needs a fresh physical
   touch, and the keys go through the desktop's RemoteDesktop portal. GNOME asks
-  once. Arbitrary text can never be typed.
+  once. If that dialog outlasts the touch, tap the action again after approving:
+  expired or cancelled requests do not press keys. Arbitrary text can never be typed.
 
 ### Platform changes
 

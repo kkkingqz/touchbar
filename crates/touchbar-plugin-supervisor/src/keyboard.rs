@@ -18,10 +18,11 @@ use std::{
 };
 
 use touchbar_broker_schema::{
-    KeyboardShortcutRequest, SchemaError, ShortcutDispatch, ShortcutOutcome, ShortcutResult,
+    KeyboardShortcutRequest, SchemaError, ShortcutCancel, ShortcutDispatch, ShortcutOutcome,
+    ShortcutResult,
 };
 use touchbar_policy::{CapabilityId, CapabilityScope};
-use touchbar_protocol::broker_ipc::{BrokerErrorCode, BrokerResult, Seqpacket};
+use touchbar_protocol::broker_ipc::{BrokerErrorCode, BrokerResult, Seqpacket, monotonic_micros};
 
 use crate::{ActivationExpectation, ActivationLedger, Backend, BackendRequest, CancellationToken};
 
@@ -50,12 +51,23 @@ impl KeyboardShortcutBackend {
         &self,
         shortcut: &str,
         cancellation: &CancellationToken,
+        activation_deadline: Option<u64>,
     ) -> Result<ShortcutResult, BrokerErrorCode> {
         let channel = self.channel.as_ref().ok_or(BrokerErrorCode::Unavailable)?;
         let channel = channel.lock().unwrap_or_else(PoisonError::into_inner);
+        // Another operation may have held the channel past this one's deadline.
+        if let Some(reason) = cancellation.reason() {
+            return Err(reason);
+        }
+        let now = monotonic_micros().map_err(|_| BrokerErrorCode::Unavailable)?;
+        let remaining = u64::try_from(cancellation.remaining().as_micros())
+            .map_err(|_| BrokerErrorCode::InvalidRequest)?;
+        let deadline = now.saturating_add(remaining);
         let request_id = self.next_request.fetch_add(1, Ordering::Relaxed);
         let dispatch = ShortcutDispatch {
             request_id,
+            deadline_monotonic_micros: activation_deadline
+                .map_or(deadline, |activation| deadline.min(activation)),
             shortcut: shortcut.into(),
         }
         .encode()
@@ -65,6 +77,9 @@ impl KeyboardShortcutBackend {
             .map_err(|_| BrokerErrorCode::Unavailable)?;
         loop {
             if let Some(reason) = cancellation.reason() {
+                if let Ok(payload) = (ShortcutCancel { request_id }).encode() {
+                    let _ = channel.send_payload(&payload);
+                }
                 return Err(reason);
             }
             match channel.try_recv_payload() {
@@ -149,7 +164,14 @@ impl Backend for KeyboardShortcutBackend {
                 return Err(reason);
             }
             let shortcut = decode(request)?;
-            match self.press(&shortcut, cancellation)? {
+            match self.press(
+                &shortcut,
+                cancellation,
+                request
+                    .activation
+                    .as_ref()
+                    .map(|activation| activation.deadline_monotonic_micros),
+            )? {
                 ShortcutResult::Pressed => Ok(()),
                 // The shortcut's application is not in front: nothing to press.
                 ShortcutResult::NotFocused | ShortcutResult::Unavailable => {
@@ -174,6 +196,7 @@ mod tests {
         collections::BTreeSet,
         sync::{Arc, atomic::AtomicBool},
         thread,
+        time::Instant,
     };
 
     use semver::Version;
@@ -306,14 +329,65 @@ mod tests {
 
     #[test]
     fn a_press_the_daemon_never_answers_times_out() {
-        let (_daemon, supervisor) = Seqpacket::pair().unwrap();
+        let (daemon, supervisor) = Seqpacket::pair().unwrap();
         let backend = KeyboardShortcutBackend::new(Some(supervisor));
+        let started = monotonic_micros().unwrap();
         let token =
             CancellationToken::new(Arc::new(AtomicBool::new(false)), Duration::from_millis(120))
                 .unwrap();
+        let latest_deadline = monotonic_micros().unwrap() + 120_000;
         assert_eq!(
             backend.execute(&request("back", None), &token),
             BrokerResult::Error(BrokerErrorCode::Timeout)
         );
+        let dispatch =
+            ShortcutDispatch::decode(&daemon.try_recv_payload().unwrap().unwrap()).unwrap();
+        assert!(dispatch.deadline_monotonic_micros > started);
+        assert!(dispatch.deadline_monotonic_micros <= latest_deadline);
+        let cancel = ShortcutCancel::decode(&daemon.try_recv_payload().unwrap().unwrap()).unwrap();
+        assert_eq!(cancel.request_id, dispatch.request_id);
+    }
+
+    #[test]
+    fn a_cancelled_operation_withdraws_its_dispatch() {
+        let (daemon, supervisor) = Seqpacket::pair().unwrap();
+        let backend = KeyboardShortcutBackend::new(Some(supervisor));
+        let flag = Arc::new(AtomicBool::new(false));
+        let cancellation = CancellationToken::new(flag.clone(), Duration::from_secs(2)).unwrap();
+        let activation_deadline = monotonic_micros().unwrap() + 1_000_000;
+        let worker =
+            thread::spawn(move || backend.press("back", &cancellation, Some(activation_deadline)));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let dispatch = loop {
+            if let Some(payload) = daemon.try_recv_payload().unwrap() {
+                break ShortcutDispatch::decode(&payload).unwrap();
+            }
+            assert!(Instant::now() < deadline, "no dispatch");
+            thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(dispatch.deadline_monotonic_micros, activation_deadline);
+        flag.store(true, Ordering::Release);
+        assert_eq!(worker.join().unwrap(), Err(BrokerErrorCode::Cancelled));
+        let cancel = ShortcutCancel::decode(&daemon.try_recv_payload().unwrap().unwrap()).unwrap();
+        assert_eq!(cancel.request_id, dispatch.request_id);
+    }
+
+    #[test]
+    fn a_waiter_that_expires_cannot_dispatch_after_the_channel_unlocks() {
+        let (daemon, supervisor) = Seqpacket::pair().unwrap();
+        let backend = Arc::new(KeyboardShortcutBackend::new(Some(supervisor)));
+        let guard = backend.channel.as_ref().unwrap().lock().unwrap();
+        let cancellation =
+            CancellationToken::new(Arc::new(AtomicBool::new(false)), Duration::from_millis(50))
+                .unwrap();
+        let waiter_backend = backend.clone();
+        let waiter_token = cancellation.clone();
+        let waiter = thread::spawn(move || waiter_backend.press("back", &waiter_token, None));
+        while !cancellation.is_cancelled() {
+            thread::sleep(Duration::from_millis(5));
+        }
+        drop(guard);
+        assert_eq!(waiter.join().unwrap(), Err(BrokerErrorCode::Timeout));
+        assert!(daemon.try_recv_payload().unwrap().is_none());
     }
 }

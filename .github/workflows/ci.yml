@@ -34,6 +34,8 @@ jobs:
           restore-keys: cargo-check-
       - name: Formatting
         run: cargo fmt --all -- --check
+      - name: T2 rollback regressions
+        run: python3 scripts/test-t2-rollback.py
       - name: Lint
         run: cargo clippy --workspace --all-targets -- -D warnings
       # touchbar-plugin-supervisor is excluded deliberately, not because its
