@@ -117,12 +117,13 @@ sed 's/fallback = "default"/fallback = "minimal"/' "$profile_file" \
 chmod 600 "$runtime_dir/profiles.next"
 mv "$runtime_dir/profiles.next" "$profile_file"
 for _ in $(seq 1 500); do
-    rg -q 'profile-watch=reloaded' "$runtime_dir/sessiond.log" \
-        && rg -q 'profile-layout .* profile=minimal' "$runtime_dir/sessiond.log" \
+    hot_reloaded=$(env TOUCHBAR_HOME="$store_dir" "$ctl" session status --format json)
+    [[ "$hot_reloaded" == *'"automatic": true'* ]] \
+        && [[ "$hot_reloaded" == *'"active": "minimal"'* ]] \
         && break
     sleep 0.01
 done
-hot_reloaded=$(env TOUCHBAR_HOME="$store_dir" "$ctl" session status --format json)
+rg -q 'profile-watch=reloaded' "$runtime_dir/sessiond.log"
 [[ "$hot_reloaded" == *'"automatic": true'* ]]
 [[ "$hot_reloaded" == *'"active": "minimal"'* ]]
 

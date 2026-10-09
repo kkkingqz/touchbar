@@ -30,8 +30,9 @@ trap cleanup EXIT INT TERM
 
 cargo build --quiet --release --manifest-path "$project_dir/Cargo.toml" \
     -p touchbar-sessiond -p touchbar-plugin-host -p touchbar-plugin-supervisor
+package_dir=$("$project_dir/scripts/build-drawing-component-demo.sh")
 "$project_dir/target/release/touchbarctl" plugin check \
-    --package "$project_dir/plugins/media" >/dev/null
+    --package "$package_dir" >/dev/null
 
 env XDG_RUNTIME_DIR="$runtime_dir" \
     TOUCHBAR_THEME="$project_dir/tests/fixtures/reduced-theme.toml" \
@@ -48,18 +49,17 @@ if [[ ! -S "$runtime_dir/$socket_name" ]]; then
     exit 1
 fi
 
-digest="sha256:$(sha256sum "$project_dir/plugins/media/component/plugin.wasm" | awk '{print $1}')"
-asset_digest="sha256:$(sha256sum "$project_dir/plugins/media/assets/touchbar.svg" | awk '{print $1}')"
+digest="sha256:$(sha256sum "$package_dir/component/plugin.wasm" | awk '{print $1}')"
 set +e
 timeout --signal=TERM --kill-after=1 1 \
     env XDG_RUNTIME_DIR="$runtime_dir" WAYLAND_DISPLAY="$socket_name" \
     "$project_dir/target/release/touchbar-plugin-supervisor" \
-    "$project_dir/plugins/media" \
+    "$package_dir" \
     --host "$project_dir/target/release/touchbar-plugin-host" \
-    --source github:cameroncooper/touchbar-media --version 1.0.0 \
-    --digest "$digest" --asset-digest "touchbar-wordmark=$asset_digest" \
+    --source github:cameroncooper/touchbar-drawing-component-demo --version 0.1.0 \
+    --digest "$digest" \
     --provenance local-development --state "$runtime_dir" -- \
-    --live --item now-playing --width 320 --require-hardware \
+    --live --item combined --width 320 --require-hardware \
     >"$runtime_dir/component.log" 2>&1
 client_status=$?
 set -e
@@ -70,10 +70,10 @@ fi
 
 wait "$server_pid"
 server_pid=
-rg -q 'component-appearance item=now-playing .* motion=Reduced ' "$runtime_dir/component.log"
+rg -q 'component-appearance item=combined .* motion=Reduced ' "$runtime_dir/component.log"
 rg -q 'shader-effect=ready backend=gles300 cache_entries=1' "$runtime_dir/component.log"
-rg -q 'component-frame item=now-playing number=0 .* primitives=55' "$runtime_dir/component.log"
-if rg -q 'component-frame item=now-playing number=[1-9]' "$runtime_dir/component.log"; then
+rg -q 'component-frame item=combined number=0 .* primitives=12' "$runtime_dir/component.log"
+if rg -q 'component-frame item=combined number=[1-9]' "$runtime_dir/component.log"; then
     echo "reduced-motion effect scheduled an additional frame" >&2
     exit 1
 fi

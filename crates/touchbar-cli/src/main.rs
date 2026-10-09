@@ -321,7 +321,7 @@ fn build_component(root: &Path) -> Result<()> {
             .with_context(|| format!("copy {} to {}", built.display(), target.display()))?;
         println!("Built {}", target.display());
     }
-    let package = inspect_package(&root)?;
+    let package = inspect_package(root)?;
     println!("Built {}\n{}", target.display(), package.package_digest);
     Ok(())
 }
@@ -4280,6 +4280,7 @@ suggested_location = "xdg-state:desktop/current"
         assert_eq!(recovery_marker_status(&marker, owner), "normal");
 
         fs::write(&marker, b"fallback-locked\n").unwrap();
+        fs::set_permissions(&marker, fs::Permissions::from_mode(0o644)).unwrap();
         assert_eq!(recovery_marker_status(&marker, owner), "fallback-locked");
         assert_eq!(recovery_marker_status(&marker, owner + 1), "invalid-marker");
 

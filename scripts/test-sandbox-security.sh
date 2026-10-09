@@ -8,11 +8,11 @@ cd "$project_dir"
 python3 scripts/test-t2-rollback.py
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --quiet
+./scripts/ci-session.sh cargo test --workspace --quiet
 # These longer deterministic campaigns use the production filesystem backends
 # and async lifecycle. Keep them explicit so the release gate cannot silently
 # regress to only the short ordinary unit suite.
-cargo test -p touchbar-plugin-supervisor \
+./scripts/ci-session.sh cargo test -p touchbar-plugin-supervisor \
     security_campaign_ -- \
     --ignored --test-threads=1
 cargo check --manifest-path fuzz/Cargo.toml --bins
@@ -41,10 +41,10 @@ if ((fuzz_seconds > 0)); then
     done
 fi
 
-./scripts/test-supervised-component-host.sh >/dev/null
+./scripts/ci-session.sh ./scripts/test-supervised-component-host.sh >/dev/null
 ./scripts/test-permission-cli.sh
 if [[ ${RUN_APPLE_GPU:-0} == 1 ]]; then
-    ./scripts/test-supervised-component-ui.sh 160 >/dev/null
+    ./scripts/ci-session.sh ./scripts/test-supervised-component-ui.sh 160 >/dev/null
 fi
 
 echo "sandbox security acceptance: PASS"

@@ -68,10 +68,15 @@ for _ in $(seq 1 300); do
     sleep 0.01
 done
 rg -q 'component-frame item=touchbar-logo number=0 .* primitives=3' "$runtime_dir/sessiond.log"
-rg -q 'configured plugin=component item=touchbar-logo region=1004x60 renderer=Apple M1 .* transport=dmabuf runtime=component' \
+rg -q 'configured plugin=component item=touchbar-logo region=1004x60 renderer=\S[^\r\n]* transport=dmabuf runtime=component' \
     "$runtime_dir/sessiond.log"
+
+if rg -qi 'renderer=.*(llvmpipe|softpipe)' "$runtime_dir/sessiond.log"; then
+    echo "installed asset component used a software renderer" >&2
+    exit 1
+fi
 
 kill "$server_pid"
 wait "$server_pid" 2>/dev/null || true
 server_pid=
-echo "installed-asset-lifecycle=ok source=$source_id item=touchbar-logo renderer=Apple-M1 transport=dmabuf"
+echo "installed-asset-lifecycle=ok source=$source_id item=touchbar-logo renderer=hardware transport=dmabuf"

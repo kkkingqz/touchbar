@@ -7,7 +7,7 @@ use std::{
         fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
         unix::{
             ffi::OsStrExt,
-            fs::MetadataExt,
+            fs::{DirBuilderExt, MetadataExt},
             process::{CommandExt, ExitStatusExt},
         },
     },
@@ -272,11 +272,14 @@ impl CommandCgroup {
             "touchbar-command-{}-{resource_id}-{unique}",
             std::process::id()
         ));
-        fs::create_dir(&path).map_err(|_| BrokerErrorCode::Unavailable)?;
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .map_err(|_| BrokerErrorCode::Unavailable)?;
         let result = (|| {
             write_cgroup_setting(&path, "cgroup.max.depth", b"0")?;
             write_cgroup_setting(&path, "cgroup.max.descendants", b"0")?;
-            write_optional_cgroup_setting(&path, "pids.max", b"33")?;
+            write_cgroup_setting(&path, "pids.max", b"33")?;
             let memory_limit = MAXIMUM_COMMAND_ADDRESS_SPACE_BYTES.to_string();
             write_optional_cgroup_setting(&path, "memory.max", memory_limit.as_bytes())?;
             write_optional_cgroup_setting(&path, "memory.swap.max", b"0")?;
@@ -1019,38 +1022,7 @@ const fn bpf_jump(code: u16, value: u32, jt: u8, jf: u8) -> libc::sock_filter {
 }
 
 fn current_cgroup_directory() -> Result<PathBuf, BrokerErrorCode> {
-    let membership =
-        fs::read_to_string("/proc/self/cgroup").map_err(|_| BrokerErrorCode::Unavailable)?;
-    let mut unified = None;
-    for line in membership.lines() {
-        let mut fields = line.splitn(3, ':');
-        if fields.next() == Some("0") && fields.next() == Some("") {
-            if unified.is_some() {
-                return Err(BrokerErrorCode::Unavailable);
-            }
-            unified = fields.next();
-        }
-    }
-    let relative = unified
-        .and_then(|path| path.strip_prefix('/'))
-        .ok_or(BrokerErrorCode::Unavailable)?;
-    let root = Path::new("/sys/fs/cgroup");
-    let directory = root.join(relative);
-    let canonical_root = root
-        .canonicalize()
-        .map_err(|_| BrokerErrorCode::Unavailable)?;
-    let canonical_directory = directory
-        .canonicalize()
-        .map_err(|_| BrokerErrorCode::Unavailable)?;
-    if !canonical_directory.starts_with(&canonical_root) {
-        return Err(BrokerErrorCode::Unavailable);
-    }
-    let metadata = fs::metadata(&canonical_directory).map_err(|_| BrokerErrorCode::Unavailable)?;
-    let effective_user = unsafe { libc::geteuid() };
-    if !metadata.is_dir() || metadata.uid() != effective_user || metadata.mode() & 0o022 != 0 {
-        return Err(BrokerErrorCode::Unavailable);
-    }
-    Ok(canonical_directory)
+    crate::component_cgroup::current_cgroup_directory().map_err(|_| BrokerErrorCode::Unavailable)
 }
 
 fn add_landlock_children_except(
@@ -1397,7 +1369,10 @@ mod tests {
         collections::{BTreeMap, BTreeSet},
         fs,
         io::Read,
-        os::unix::{ffi::OsStrExt, fs::PermissionsExt},
+        os::unix::{
+            ffi::OsStrExt,
+            fs::{MetadataExt, PermissionsExt},
+        },
         path::{Path, PathBuf},
         sync::{Arc, atomic::Ordering},
         thread,
@@ -1405,7 +1380,7 @@ mod tests {
     };
 
     use semver::Version;
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
     use touchbar_broker_schema::{CommandEvent, CommandOpened, CommandRunRequest, CommandValue};
     use touchbar_package::GithubSource;
     use touchbar_policy::{
@@ -1423,6 +1398,50 @@ mod tests {
         CommandCgroup, CommandLandlock, CommandRunBackend, CommandSeccomp,
         current_cgroup_directory, prepare_command, spawn_command,
     };
+
+    // The broker intentionally rejects multiply linked executables. Some
+    // distributions install Rust coreutils as hard-linked applets; copying one
+    // also fails its executable-name check after descriptor pinning/rename.
+    // Use standalone GNU tools, copied outside the package to private files
+    // owned by this user. This also works when systemd's user namespace leaves
+    // the host root UID unmapped, without relaxing production ownership checks.
+    struct CommandFixtures {
+        directory: TempDir,
+    }
+
+    impl CommandFixtures {
+        fn new() -> Self {
+            let directory = tempdir().unwrap();
+            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            Self { directory }
+        }
+
+        fn copy(&self, name: &str) -> String {
+            let source = [format!("/usr/bin/gnu{name}"), format!("/usr/bin/{name}")]
+                .into_iter()
+                .find(|path| {
+                    fs::metadata(path).is_ok_and(|metadata| {
+                        metadata.is_file()
+                            && metadata.nlink() == 1
+                            && metadata.mode() & 0o111 != 0
+                            && metadata.mode() & 0o022 == 0
+                    }) && (name == "sh"
+                        || std::process::Command::new(path)
+                            .arg("--version")
+                            .output()
+                            .is_ok_and(|output| {
+                                output.status.success()
+                                    && String::from_utf8_lossy(&output.stdout)
+                                        .contains("GNU coreutils")
+                            }))
+                })
+                .unwrap_or_else(|| panic!("standalone GNU {name} test fixture is required"));
+            let destination = self.directory.path().join(name);
+            fs::copy(source, &destination).unwrap();
+            fs::set_permissions(&destination, fs::Permissions::from_mode(0o755)).unwrap();
+            destination.to_str().unwrap().to_owned()
+        }
+    }
 
     fn rule(executable: &str, arguments: Vec<CommandArgument>) -> CommandRule {
         CommandRule {
@@ -1525,10 +1544,13 @@ mod tests {
     #[test]
     fn metacharacters_are_literal_and_environment_starts_empty() {
         let package = tempdir().unwrap();
+        let commands = CommandFixtures::new();
+        let printf = commands.copy("printf");
+        let env = commands.copy("env");
         let submitted = "$(touch /tmp/not-executed); $HOME * ' quoted";
         let printf_request = request(
             rule(
-                "/usr/bin/printf",
+                &printf,
                 vec![
                     CommandArgument::Literal {
                         value: "[%s]".into(),
@@ -1567,7 +1589,7 @@ mod tests {
             ]
         );
 
-        let mut env_rule = rule("/usr/bin/env", Vec::new());
+        let mut env_rule = rule(&env, Vec::new());
         env_rule.environment = BTreeMap::from([("SAFE_VALUE".into(), "fixed".into())]);
         let (_, results) = run_resource(
             Arc::new(CommandRunBackend::new(package.path().to_owned())),
@@ -1586,24 +1608,12 @@ mod tests {
 
     #[test]
     fn the_runtime_directory_reaches_only_commands_that_name_it() {
-        use std::os::unix::fs::MetadataExt;
-
-        let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") else {
-            return;
-        };
-        // Some distributions link /usr/bin/env to a multicall binary, which
-        // the broker rightly refuses; GNU's own copy is a plain file there.
-        let Some(env) = ["/usr/bin/env", "/usr/bin/gnuenv"]
-            .into_iter()
-            .find(|path| {
-                fs::symlink_metadata(path)
-                    .is_ok_and(|metadata| metadata.file_type().is_file() && metadata.nlink() == 1)
-            })
-        else {
-            return;
-        };
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+            .expect("run supervisor tests in a user login session with XDG_RUNTIME_DIR");
+        let commands = CommandFixtures::new();
+        let env = commands.copy("env");
         let package = tempdir().unwrap();
-        let mut session_rule = rule(env, Vec::new());
+        let mut session_rule = rule(&env, Vec::new());
         session_rule.session_environment = BTreeSet::from([SessionVariable::RuntimeDir]);
         let (_, results) = run_resource(
             Arc::new(CommandRunBackend::new(package.path().to_owned())),
@@ -1678,8 +1688,10 @@ mod tests {
         let package = tempdir().unwrap();
         let approved = tempdir().unwrap();
         fs::write(approved.path().join("selected"), b"original").unwrap();
+        let commands = CommandFixtures::new();
+        let cat = commands.copy("cat");
         let template = rule(
-            "/usr/bin/cat",
+            &cat,
             vec![CommandArgument::ApprovedFile {
                 name: "file".into(),
                 mount: "document".into(),
@@ -1766,10 +1778,8 @@ mod tests {
             BrokerErrorCode::OutOfScope
         );
 
-        let external = tempdir().unwrap();
-        let executable = external.path().join("printf");
-        fs::copy("/usr/bin/printf", &executable).unwrap();
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        let commands = CommandFixtures::new();
+        let executable = PathBuf::from(commands.copy("printf"));
         let request = request(
             rule(
                 executable.to_str().unwrap(),
@@ -1782,7 +1792,7 @@ mod tests {
             1,
         );
         let prepared = prepare_command(&request, package.path()).unwrap();
-        fs::rename(&executable, external.path().join("old")).unwrap();
+        fs::rename(&executable, commands.directory.path().join("old")).unwrap();
         fs::write(&executable, b"#!/usr/bin/sh\necho replaced\n").unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
         let cgroup = CommandCgroup::create(92).unwrap();
@@ -1803,12 +1813,39 @@ mod tests {
     }
 
     #[test]
+    fn executable_hardlinks_and_magic_links_remain_out_of_scope() {
+        let package = tempdir().unwrap();
+        let commands = CommandFixtures::new();
+        let executable = commands.copy("printf");
+        let alias = commands.directory.path().join("alias");
+        fs::hard_link(&executable, &alias).unwrap();
+        for path in [&executable, alias.to_str().unwrap()] {
+            let request = request(rule(path, Vec::new()), Vec::new(), BTreeMap::new(), 1);
+            assert_eq!(
+                prepare_command(&request, package.path()).unwrap_err_code(),
+                BrokerErrorCode::OutOfScope
+            );
+        }
+        fs::remove_file(alias).unwrap();
+        let file = fs::File::open(&executable).unwrap();
+        let magic = format!("/proc/self/fd/{}", std::os::fd::AsRawFd::as_raw_fd(&file));
+        let request = request(rule(&magic, Vec::new()), Vec::new(), BTreeMap::new(), 1);
+        assert_eq!(
+            prepare_command(&request, package.path()).unwrap_err_code(),
+            BrokerErrorCode::OutOfScope
+        );
+    }
+
+    #[test]
     fn timeout_output_and_parallel_process_quotas_fail_closed() {
         let package = tempdir().unwrap();
+        let commands = CommandFixtures::new();
+        let sleep = commands.copy("sleep");
+        let yes = commands.copy("yes");
         let backend = Arc::new(CommandRunBackend::new(package.path().to_owned()));
 
         let mut timeout_rule = rule(
-            "/usr/bin/sleep",
+            &sleep,
             vec![CommandArgument::Literal { value: "10".into() }],
         );
         timeout_rule.timeout_milliseconds = 20;
@@ -1821,7 +1858,7 @@ mod tests {
             Some(&BrokerResult::Error(BrokerErrorCode::Timeout))
         );
 
-        let mut output_rule = rule("/usr/bin/yes", Vec::new());
+        let mut output_rule = rule(&yes, Vec::new());
         output_rule.maximum_output_bytes = 100;
         let (_, results) = run_resource(
             Arc::clone(&backend),
@@ -1834,7 +1871,7 @@ mod tests {
 
         let long = request(
             rule(
-                "/usr/bin/sleep",
+                &sleep,
                 vec![CommandArgument::Literal { value: "10".into() }],
             ),
             Vec::new(),
@@ -1858,16 +1895,20 @@ mod tests {
     fn cgroup_terminates_descendants_which_escape_the_commands_process_group() {
         let package = tempdir().unwrap();
         let state = tempdir().unwrap();
+        let commands = CommandFixtures::new();
+        let shell = commands.copy("sh");
+        let sleep = commands.copy("sleep");
         let pid_file = state.path().join("child-pid");
         let parent_procs = current_cgroup_directory().unwrap().join("cgroup.procs");
         let script = format!(
             "if printf 0 > '{}'; then printf ESCAPED; else printf CONTAINED; fi; \
-             /usr/bin/setsid /usr/bin/sleep 10 & child=$!; printf '%s' \"$child\" > '{}'; wait",
+             /usr/bin/setsid '{}' 10 & child=$!; printf '%s' \"$child\" > '{}'; wait",
             parent_procs.display(),
+            sleep,
             pid_file.display()
         );
         let mut template = rule(
-            "/usr/bin/sh",
+            &shell,
             vec![
                 CommandArgument::Literal { value: "-c".into() },
                 CommandArgument::Literal { value: script },
@@ -1911,6 +1952,70 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn command_launch_is_bounded_beside_a_running_component_host() {
+        use std::os::unix::process::CommandExt;
+        struct Host(std::process::Child);
+        impl Drop for Host {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let package = tempdir().unwrap();
+        let commands = CommandFixtures::new();
+        let sleep = commands.copy("sleep");
+        let printf = commands.copy("printf");
+        let component = crate::ComponentCgroup::create(94).unwrap();
+        let processes = component.processes_fd();
+        let mut host = std::process::Command::new(sleep);
+        host.arg("10");
+        // SAFETY: the component cgroup descriptor stays live through spawn;
+        // write is async-signal-safe and migrates the child before exec.
+        unsafe {
+            host.pre_exec(move || {
+                if libc::write(processes, b"0".as_ptr().cast(), 1) != 1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut host = Host(host.spawn().unwrap());
+        assert!(host.0.try_wait().unwrap().is_none());
+        let (_, results) = run_resource(
+            Arc::new(CommandRunBackend::new(package.path().to_owned())),
+            &request(
+                rule(
+                    &printf,
+                    vec![CommandArgument::Literal {
+                        value: "beside-host".into(),
+                    }],
+                ),
+                Vec::new(),
+                BTreeMap::new(),
+                1,
+            ),
+        );
+        assert!(matches!(
+            results.last(),
+            Some(BrokerResult::Success { payload })
+                if matches!(CommandEvent::decode(payload),
+                    Ok(CommandEvent::Exited { exit_code: Some(0), signal: None, .. }))
+        ));
+        assert!(host.0.try_wait().unwrap().is_none());
+    }
+
+    #[test]
+    fn command_cgroup_has_a_task_limit_before_launch() {
+        let cgroup = CommandCgroup::create(93).unwrap();
+        assert_eq!(
+            fs::read_to_string(cgroup.path.join("pids.max"))
+                .unwrap()
+                .trim(),
+            "33"
+        );
     }
 
     #[test]

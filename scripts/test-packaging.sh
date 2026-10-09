@@ -60,6 +60,8 @@ rg -q '^ExecStart=/usr/lib/touchbar/touchbar-sessiond ' \
     "$project_dir/packaging/systemd/user/touchbar-session.service"
 rg -Fxq 'Delegate=cpu memory pids' \
     "$project_dir/packaging/systemd/user/touchbar-session.service"
+rg -Fxq 'DelegateSubgroup=touchbar-supervisor' \
+    "$project_dir/packaging/systemd/user/touchbar-session.service"
 rg -Fxq 'ProtectControlGroups=private' \
     "$project_dir/packaging/systemd/user/touchbar-session.service"
 rg -q '^for binary in touchbard touchbar-sessiond touchbarctl touchbar-plugin-host touchbar-plugin-supervisor touchbar-secret-helper; do$' \

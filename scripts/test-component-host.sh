@@ -69,7 +69,11 @@ filesystem_write_replay=$(cargo run --quiet --manifest-path "$root_dir/Cargo.tom
 [[ "$filesystem_write_replay" == *'"operation": "create-file"'* ]]
 [[ "$filesystem_write_replay" == *'"label": "SAVED 16 B"'* ]]
 
-cargo run --quiet --manifest-path "$root_dir/Cargo.toml" -p touchbar-cli -- \
+cargo build --quiet --manifest-path "$root_dir/Cargo.toml" \
+    --target-dir "$root_dir/target" -p touchbar-cli
+# Run outside Cargo's child environment: `cargo run` injects CARGO without
+# RUSTC, which the component builder rejects as an incomplete tool override.
+"$root_dir/target/debug/touchbarctl" \
     plugin build --package "$root_dir/plugins/command-deck" >/dev/null
 command_replay=$(cargo run --quiet --manifest-path "$root_dir/Cargo.toml" \
     -p touchbar-plugin-host -- "$root_dir/plugins/command-deck" --replay \

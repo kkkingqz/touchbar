@@ -2,7 +2,7 @@ use std::{
     fs, io,
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
-        unix::fs::MetadataExt,
+        unix::fs::{DirBuilderExt, MetadataExt},
     },
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -20,7 +20,7 @@ const COMPONENT_PIDS_MAX: &[u8] = b"32";
 /// started several plugin items together, and Mesa could not start the one
 /// shader-compiler thread it needs to load the GPU driver. The per-host bound
 /// is the leaf's `pids.max`; this rlimit only keeps a runaway host from
-/// exhausting the user where the pids controller is not delegated.
+/// exhausting the user across concurrently launched hosts and commands.
 pub const COMPONENT_TASK_MARGIN: u64 = 1024;
 const COMPONENT_MEMORY_MAX: &[u8] = b"536870912";
 const COMPONENT_CPU_MAX: &[u8] = b"100000 100000";
@@ -50,15 +50,16 @@ impl ComponentCgroup {
             "{COMPONENT_CGROUP_PREFIX}{}-{instance_id}-{unique}",
             std::process::id()
         ));
-        fs::create_dir(&path).context("create component cgroup")?;
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .context("create component cgroup")?;
         let result = (|| {
             write_setting(&path, "cgroup.max.depth", b"0")?;
             write_setting(&path, "cgroup.max.descendants", b"0")?;
-            // Direct launches can sit below a systemd scope that has not
-            // delegated controllers. The leaf and cgroup.kill remain
-            // mandatory; rlimits enforce task/address-space caps in that
-            // case. Configure every delegated controller when present.
-            write_optional_setting(&path, "pids.max", COMPONENT_PIDS_MAX)?;
+            // Per-user rlimits cannot enforce a per-host task ceiling. pids
+            // is mandatory; configure other delegated controllers when present.
+            write_setting(&path, "pids.max", COMPONENT_PIDS_MAX)?;
             write_optional_setting(&path, "memory.max", COMPONENT_MEMORY_MAX)?;
             write_optional_setting(&path, "memory.swap.max", b"0")?;
             write_optional_setting(&path, "memory.oom.group", b"1")?;
@@ -250,7 +251,7 @@ pub fn component_task_limit(maximum_additional_tasks: u64) -> Result<u64> {
     Ok(limit)
 }
 
-fn current_cgroup_directory() -> Result<PathBuf> {
+pub(crate) fn current_cgroup_directory() -> Result<PathBuf> {
     let membership = fs::read_to_string("/proc/self/cgroup").context("read cgroup membership")?;
     let mut unified = None;
     for line in membership.lines() {
@@ -266,9 +267,25 @@ fn current_cgroup_directory() -> Result<PathBuf> {
         .and_then(|path| path.strip_prefix('/'))
         .context("missing unified cgroup-v2 membership")?;
     let root = Path::new("/sys/fs/cgroup").canonicalize()?;
-    let directory = root.join(relative).canonicalize()?;
+    let mut directory = root.join(relative).canonicalize()?;
     if !directory.starts_with(&root) {
         bail!("cgroup membership escapes the cgroup-v2 mount");
+    }
+    // systemd DelegateSubgroup and ci-session.sh put the supervisor in this
+    // leaf. Commands and component hosts belong beside it, under an empty
+    // delegated domain; enabling pids in a populated parent instead creates
+    // a threaded domain whose ordinary children cannot accept processes.
+    if directory
+        .file_name()
+        .is_some_and(|name| name == "touchbar-supervisor")
+    {
+        directory = directory
+            .parent()
+            .context("missing delegated cgroup parent")?
+            .to_owned();
+    }
+    if !directory.starts_with(&root) {
+        bail!("delegated cgroup escapes the cgroup-v2 mount");
     }
     let metadata = fs::metadata(&directory)?;
     // SAFETY: geteuid takes no arguments.
@@ -276,6 +293,27 @@ fn current_cgroup_directory() -> Result<PathBuf> {
     if !metadata.is_dir() || metadata.uid() != effective_user || metadata.mode() & 0o022 != 0 {
         bail!("current cgroup is not a private user-owned directory");
     }
+    if fs::read_to_string(directory.join("cgroup.type"))?.trim() != "domain"
+        || !fs::read_to_string(directory.join("cgroup.procs"))?
+            .trim()
+            .is_empty()
+    {
+        bail!(
+            "supervisor needs an empty delegated domain; use ci-session.sh or DelegateSubgroup=touchbar-supervisor"
+        );
+    }
+    let available = fs::read_to_string(directory.join("cgroup.controllers"))?;
+    let available = available.split_whitespace().collect::<Vec<_>>();
+    if !available.contains(&"pids") {
+        bail!("pids controller is not delegated to the supervisor");
+    }
+    let enable = ["cpu", "memory", "pids"]
+        .into_iter()
+        .filter(|controller| available.contains(controller))
+        .map(|controller| format!("+{controller}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    write_setting(&directory, "cgroup.subtree_control", enable.as_bytes())?;
     Ok(directory)
 }
 

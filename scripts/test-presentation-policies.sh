@@ -38,6 +38,8 @@ run_case() {
     runtime_dir=$(mktemp -d "$runtime_root/presentation-${label}.XXXXXX")
     socket_name=bar
     chmod 700 "$runtime_dir"
+    install -m 0600 "$project_dir/tests/fixtures/presentations-v1.toml" \
+        "$runtime_dir/profiles.toml"
 
     cleanup_case() {
         local status=$?
@@ -60,7 +62,7 @@ run_case() {
 
     env XDG_RUNTIME_DIR="$runtime_dir" \
         "$sessiond" --socket "$socket_name" --no-plugins "$demo_flag" \
-        --profiles "$project_dir/tests/fixtures/presentations-v1.toml" \
+        --profiles "$runtime_dir/profiles.toml" \
         --exit-after-clients 2 >"$runtime_dir/sessiond.log" 2>&1 &
     session_pid=$!
 
@@ -116,6 +118,8 @@ run_rejected_case() {
     runtime_dir=$(mktemp -d "$runtime_root/presentation-rejected.XXXXXX")
     socket_name=bar
     chmod 700 "$runtime_dir"
+    install -m 0600 "$project_dir/tests/fixtures/presentations-v1.toml" \
+        "$runtime_dir/profiles.toml"
 
     cleanup_rejected_case() {
         local status=$?
@@ -138,7 +142,7 @@ run_rejected_case() {
 
     env XDG_RUNTIME_DIR="$runtime_dir" \
         "$sessiond" --socket "$socket_name" --no-plugins --demo-tap \
-        --profiles "$project_dir/tests/fixtures/presentations-v1.toml" \
+        --profiles "$runtime_dir/profiles.toml" \
         --exit-after-clients 2 >"$runtime_dir/sessiond.log" 2>&1 &
     session_pid=$!
 

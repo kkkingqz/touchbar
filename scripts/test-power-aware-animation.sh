@@ -88,4 +88,4 @@ run_case() {
 run_case external 1 external 60 61 50 70
 run_case battery 0 battery 30 31 25 35
 
-echo "power-aware-animation=ok external=60Hz battery=30Hz source=fake-sysfs renderer=Apple-M1"
+echo "power-aware-animation=ok external=60Hz battery=30Hz source=fake-sysfs renderer=hardware"

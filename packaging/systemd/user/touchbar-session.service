@@ -24,6 +24,9 @@ ProtectKernelLogs=true
 # only the controllers it uses, and expose only this unit's writable subtree
 # rather than the host cgroup hierarchy.
 Delegate=cpu memory pids
+# Keep the delegated parent empty so domain controllers can bound sibling
+# command/component cgroups. A populated parent cannot provide this topology.
+DelegateSubgroup=touchbar-supervisor
 ProtectControlGroups=private
 LockPersonality=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

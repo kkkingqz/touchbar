@@ -391,7 +391,7 @@ fn waking(
 ) -> NodeId {
     let mark = pixel_wordmark(b, width, height, geometry, colors);
     let mut rule = Canvas2d::new("Handback rule", width, height);
-    let rule_height = geometry.cell.max(1.0).min(3.0);
+    let rule_height = geometry.cell.clamp(1.0, 3.0);
     rule.fill_rect(
         0.0,
         ((height - rule_height) * 0.5).floor(),
@@ -636,7 +636,7 @@ mod tests {
             .sum();
         assert_eq!(runs, 211);
         assert_eq!(lifted_runs, 79);
-        assert!(runs + lifted_runs + 1 <= 512);
+        assert!(runs + lifted_runs < 512);
     }
 
     #[test]

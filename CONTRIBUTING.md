@@ -29,14 +29,47 @@ rules, and the installer without writing to `/usr`.
 
 ### It needs a real login session
 
-Run it from a graphical user session. The supervisor's confinement is not
-optional and not simulated: it requires its own cgroup to be a private,
-user-owned directory, plus Landlock, seccomp, `pidfd`, and a session bus.
-Twelve `touchbar-plugin-supervisor` tests assert exactly those properties.
+Run it on the host from a user login session. The supervisor's confinement
+requires a private, user-owned cgroup with the `pids` controller delegated,
+Landlock, seccomp, `pidfd`, and a session bus. A graphical login alone does not
+guarantee cgroup delegation. The gate
+uses `scripts/ci-session.sh` to run tests in a delegated user systemd scope
+when necessary; it preserves the caller's environment and needs no sudo.
+The wrapper moves its runner into a `touchbar-supervisor` leaf, leaving the
+parent empty. The installed user service uses the same layout through
+`DelegateSubgroup=touchbar-supervisor`. Commands and component hosts get
+sibling cgroups under that parent; the supervisor enables its delegated
+controllers there before configuring child limits. Command launches require
+the 33-task limit before starting any child. Delegation without enabling the
+controller used to leave the limit absent; the per-user process rlimit cannot
+substitute for it. Child cgroup directories are created with private modes
+regardless of the caller's umask, so SIGKILL recovery can safely reclaim them.
 
-A container or a hosted CI runner does not provide them. A job cgroup owned by
-root fails the ownership check, `systemd-analyze --user` has no user manager to
-talk to, and Landlock reports unavailable.
+Command tests require standalone GNU coreutils and a standalone `/usr/bin/sh`.
+They select `/usr/bin/gnu<tool>` when available, otherwise `/usr/bin/<tool>`,
+and copy the binaries to private, user-owned fixtures outside the package.
+This supports distributions whose default coreutils are multiply linked Rust
+applets, and systemd user namespaces where host root ownership is unmapped.
+Production ownership, hardlink, and descriptor-pinning checks remain enforced.
+Root-owned command paths remain rejected when their owner is unmapped in the
+service's user namespace.
+Missing fixtures fail explicitly rather than silently skipping assertions.
+The GPU asset acceptance script uses Python 3.11 or newer to read the package
+manifest and bind every declared asset digest.
+
+If you build in a container, compile tests there, then run the resulting binary
+on the host. For example:
+
+```bash
+# In the build environment; Cargo prints the test executable path.
+cargo test -p touchbar-plugin-supervisor --lib --no-run
+# In the host login session, using the path Cargo printed above.
+./scripts/ci-session.sh target/debug/deps/touchbar_plugin_supervisor-<hash>
+```
+
+A container or a hosted runner may lack delegation, the host user manager, or
+kernel confinement. The wrapper reports a missing user manager explicitly;
+it does not weaken the sandbox to make these environments pass.
 
 ## What CI covers, and what it does not
 

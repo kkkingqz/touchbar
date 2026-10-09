@@ -92,7 +92,7 @@ if ((context_delta > 8)); then
     exit 1
 fi
 
-rg -q 'configured plugin=touchbar.gles-demo .* renderer=Apple M1 .* transport=dmabuf' \
+rg -q 'configured plugin=touchbar.gles-demo .* renderer=\S[^\r\n]* transport=dmabuf' \
     "$runtime_dir/client.log"
 
-echo "static-native-client=ok duration_ms=2000 frames=$frames cpu_ticks=$cpu_delta context_switches=$context_delta renderer=Apple-M1"
+echo "static-native-client=ok duration_ms=2000 frames=$frames cpu_ticks=$cpu_delta context_switches=$context_delta renderer=hardware"

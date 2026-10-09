@@ -468,11 +468,13 @@ fn required_grant_revocation_stops_and_regrant_restarts_the_host() {
     let (directory, package, digest) = fixture(true);
     let grants = directory.path().join("permissions.toml");
     let launches = directory.path().join("launches");
+    let membership = directory.path().join("host-cgroup");
     let host = directory.path().join("fake-host.sh");
     fs::write(
         &host,
         format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$$\" >> '{}'\nexec cat <&3 >/dev/null\n",
+            "#!/bin/sh\ncat /proc/self/cgroup > '{}'\nprintf '%s\\n' \"$$\" >> '{}'\nexec cat <&3 >/dev/null\n",
+            membership.display(),
             launches.display()
         ),
     )
@@ -497,7 +499,21 @@ fn required_grant_revocation_stops_and_regrant_restarts_the_host() {
     let pids = wait_for_pids(&launches, 2);
     assert_ne!(pids[0], pids[1]);
 
+    let membership = fs::read_to_string(&membership).unwrap();
+    let relative = membership
+        .lines()
+        .find_map(|line| line.strip_prefix("0::/"))
+        .unwrap();
+    let orphan = Path::new("/sys/fs/cgroup").join(relative);
+    assert!(orphan.exists(), "running host's cgroup is missing");
     let killed_supervisor = child.0.id();
+    assert!(
+        orphan
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with(&format!("touchbar-component-{killed_supervisor}-"))
+    );
     child.0.kill().unwrap();
     child.0.wait().unwrap();
     wait_until_gone(pids[1]);
@@ -512,21 +528,8 @@ fn required_grant_revocation_stops_and_regrant_restarts_the_host() {
             .unwrap()
             .success()
     );
-    let current = fs::read_to_string("/proc/self/cgroup").unwrap();
-    let relative = current
-        .lines()
-        .find_map(|line| line.strip_prefix("0::/"))
-        .unwrap();
-    let parent = Path::new("/sys/fs/cgroup").join(relative);
-    let stale_prefix = format!("touchbar-component-{killed_supervisor}-");
     assert!(
-        fs::read_dir(parent)
-            .unwrap()
-            .filter_map(Result::ok)
-            .all(|entry| !entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(&stale_prefix)),
+        !orphan.exists(),
         "dead supervisor left an orphan component cgroup"
     );
 }

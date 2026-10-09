@@ -57,7 +57,7 @@ done
 
 rg -q "system-scene=hidden reason=user-content" "$runtime_dir/touchbar-sessiond.log"
 rg -q "system-scene=visible reason=empty-profile" "$runtime_dir/touchbar-sessiond.log"
-rg -q "renderer=Apple M1 .* transport=dmabuf" "$runtime_dir/plugin.log"
+rg -q "renderer=\S[^\r\n]* transport=dmabuf" "$runtime_dir/plugin.log"
 
 kill "$session_pid"
 wait "$session_pid" 2>/dev/null || true

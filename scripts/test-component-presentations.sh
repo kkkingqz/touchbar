@@ -9,6 +9,9 @@ socket_name=bar
 session_pid=
 mkdir -p "$store_dir"
 chmod 700 "$runtime_dir" "$store_dir"
+profile_file="$runtime_dir/profiles.toml"
+install -m 0600 "$project_dir/tests/fixtures/first-party-controls-presentation-v1.toml" \
+    "$profile_file"
 
 cleanup() {
     local status=$?
@@ -42,7 +45,7 @@ env TOUCHBAR_HOME="$store_dir" \
 env XDG_RUNTIME_DIR="$runtime_dir" TOUCHBAR_HOME="$store_dir" \
     "$project_dir/target/release/touchbar-sessiond" \
     --socket "$socket_name" --demo-tap \
-    --profiles "$project_dir/tests/fixtures/first-party-controls-presentation-v1.toml" \
+    --profiles "$profile_file" \
     >"$runtime_dir/sessiond.log" 2>&1 &
 session_pid=$!
 
@@ -54,7 +57,7 @@ for _ in $(seq 1 1500); do
     sleep 0.01
 done
 
-rg -q 'presentation-catalog bars=1' "$runtime_dir/sessiond.log"
+rg -q 'presentation-catalog bars=2' "$runtime_dir/sessiond.log"
 rg -q 'presentation=anchored mode=persistent contact=0 session=1 content=volume-controls' \
     "$runtime_dir/sessiond.log"
 rg -q 'presentation-layout item=github:cameroncooper/touchbar-controls#volume x=0 width=240 overlay=true' \
@@ -73,7 +76,7 @@ mv "$runtime_dir/sessiond.log" "$runtime_dir/persistent.log"
 env XDG_RUNTIME_DIR="$runtime_dir" TOUCHBAR_HOME="$store_dir" \
     "$project_dir/target/release/touchbar-sessiond" \
     --socket "$socket_name" --demo-touch \
-    --profiles "$project_dir/tests/fixtures/first-party-controls-presentation-v1.toml" \
+    --profiles "$profile_file" \
     >"$runtime_dir/sessiond.log" 2>&1 &
 session_pid=$!
 
@@ -102,7 +105,7 @@ mv "$runtime_dir/sessiond.log" "$runtime_dir/transient.log"
 env XDG_RUNTIME_DIR="$runtime_dir" TOUCHBAR_HOME="$store_dir" \
     "$project_dir/target/release/touchbar-sessiond" \
     --socket "$socket_name" --demo-tap \
-    --profiles "$project_dir/tests/fixtures/first-party-controls-presentation-v1.toml" \
+    --profiles "$profile_file" \
     >"$runtime_dir/sessiond.log" 2>&1 &
 session_pid=$!
 

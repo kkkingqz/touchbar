@@ -56,9 +56,9 @@ wait "$server_pid"
 server_pid=
 
 rg -q "broker: supervised generation=1" "$runtime_dir/component.log"
-rg -q "configured plugin=component item=hello region=${width}x60 renderer=Apple M1 .* transport=dmabuf runtime=component" \
+rg -q "configured plugin=component item=hello region=${width}x60 renderer=\S[^\r\n]* transport=dmabuf runtime=component" \
     "$runtime_dir/component.log"
-rg -q "client-summary plugin=github:cameroncooper/touchbar-component-demo frames=3 renderer=Apple M1 .* runtime=component" \
+rg -q "client-summary plugin=github:cameroncooper/touchbar-component-demo frames=3 renderer=\S[^\r\n]* runtime=component" \
     "$runtime_dir/component.log"
 rg -q "summary frames=3 .* invalid=0 dmabuf=3 shm=0" "$runtime_dir/touchbar-sessiond.log"
 

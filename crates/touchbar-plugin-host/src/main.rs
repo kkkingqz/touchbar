@@ -160,9 +160,9 @@ fn poll_timeout_milliseconds(deadline: Instant, now: Instant) -> i32 {
     if remaining.is_zero() {
         return 0;
     }
-    let rounded_up = remaining
-        .as_millis()
-        .saturating_add(u128::from(remaining.subsec_nanos() % 1_000_000 != 0));
+    let rounded_up = remaining.as_millis().saturating_add(u128::from(
+        !remaining.subsec_nanos().is_multiple_of(1_000_000),
+    ));
     i32::try_from(rounded_up).unwrap_or(i32::MAX)
 }
 

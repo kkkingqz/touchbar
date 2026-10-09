@@ -6,6 +6,12 @@ runtime_root="$project_dir/run"
 mkdir -p "$runtime_root"
 runtime_dir=$(mktemp -d "$runtime_root/explicit-sync.XXXXXX")
 server_pid=
+# The throughput assertion measures explicit sync at 60 Hz, independently of
+# the laptop's current power state or the user's configured animation rates.
+power_root="$runtime_dir/power_supply"
+install -d -m 700 "$power_root/adapter"
+printf 'Mains\n' >"$power_root/adapter/type"
+printf '1\n' >"$power_root/adapter/online"
 
 cleanup() {
     status=$?
@@ -30,6 +36,8 @@ normal_dir="$runtime_dir/normal"
 mkdir -m 700 "$normal_dir"
 normal_socket="explicit-sync-normal-$$"
 env XDG_RUNTIME_DIR="$normal_dir" \
+    TOUCHBAR_POWER_SUPPLY_ROOT="$power_root" \
+    TOUCHBAR_THEME="$project_dir/tests/fixtures/power-aware-theme.toml" \
     "$project_dir/target/release/touchbar-sessiond" \
     --socket "$normal_socket" --no-plugins --exit-after-client \
     >"$normal_dir/server.log" 2>&1 &
@@ -85,4 +93,4 @@ for mode in duplicate no-buffer shm invalid; do
     server_pid=
 done
 
-echo "explicit-sync=ok renderer=Apple-M1 frames=120 malformed=4 fps=$measured_fps"
+echo "explicit-sync=ok renderer=hardware frames=120 malformed=4 fps=$measured_fps"

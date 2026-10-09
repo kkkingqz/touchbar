@@ -23,15 +23,18 @@ set +e
 cgroup_output=$(systemd-run --user --wait --collect --pipe \
     --unit="$probe_id-cgroup.service" \
     --property='Delegate=cpu memory pids' \
+    --property=DelegateSubgroup=touchbar-supervisor \
     --property=ProtectControlGroups=private \
     /usr/bin/bash -c '
         set -e
+        test -z "$(cat /sys/fs/cgroup/cgroup.procs)"
+        test "$(cat /sys/fs/cgroup/cgroup.type)" = domain
+        printf "+cpu +memory +pids" > /sys/fs/cgroup/cgroup.subtree_control
         probe=/sys/fs/cgroup/touchbar-delegation-probe
         mkdir "$probe"
-        # These two cgroup-v2 controls are mandatory in the supervisor. CPU,
-        # memory, and PID controls are applied when the delegated controller
-        # files are present, with rlimits as the documented fallback.
-        for control in cgroup.procs cgroup.kill; do
+        # The parent must accept domain children with delegated controllers;
+        # ownership alone does not prove that task limits can be configured.
+        for control in cgroup.procs cgroup.kill pids.max memory.max; do
             test -w "$probe/$control"
         done
         rmdir "$probe"
@@ -58,6 +61,7 @@ probe_output=$(systemd-run --user --wait --collect --pipe \
     --property=ProtectKernelModules=true \
     --property=ProtectKernelLogs=true \
     --property='Delegate=cpu memory pids' \
+    --property=DelegateSubgroup=touchbar-supervisor \
     --property=ProtectControlGroups=private \
     --property=LockPersonality=true \
     --property='RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' \
