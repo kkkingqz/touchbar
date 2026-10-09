@@ -3638,6 +3638,8 @@ name = "touchbar-sessiond"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-io",
+ "futures-lite",
  "glow",
  "khronos-egl",
  "libc",

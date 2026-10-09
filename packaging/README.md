@@ -95,7 +95,7 @@ stands aside outside its desktop, and the media source.
   does not retry.
 - `--gnome-context` provides `application.id` on GNOME through the
   [Window Monitor Pro](https://extensions.gnome.org/extension/8549/window-monitor-pro/)
-  extension, which signals every focus change over D-Bus; nothing is polled.
+  extension, which signals every focus change over D-Bus.
   The value is the focused window's WM class, trimmed and lowercased, for
   example `org.gnome.ptyxis` or `firefox_firefox` for the snap Firefox. The bare
   desktop has no `application.id`. Without the extension, or while it is
@@ -103,7 +103,11 @@ stands aside outside its desktop, and the media source.
   focused; the source follows GNOME Shell's extension state, so enabling the
   extension later takes effect without a restart. GNOME provides neither
   `workspace.id` nor `activity.*`. Only signals from the current owner of
-  `org.gnome.Shell` are accepted.
+  `org.gnome.Shell` are accepted. Losing that owner clears the cached focus;
+  a replacement owner triggers a fresh extension/focus snapshot. Temporary
+  snapshot errors are retried after one second in the background reader.
+  A successful snapshot, including a confirmed inactive extension, stops
+  those retries; normal focus tracking remains event-driven.
 - `--media-context` follows MPRIS players on the session bus and describes the
   now-playing session, chosen as on macOS: the player that most recently
   started playing keeps it while paused, until another one starts or it goes

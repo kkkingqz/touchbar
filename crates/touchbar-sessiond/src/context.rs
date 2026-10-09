@@ -13,6 +13,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use futures_lite::StreamExt;
 use touchbar_model::ContextValue;
 use zbus::{
     MatchRule,
@@ -41,6 +42,7 @@ const SHELL_EXTENSIONS_INTERFACE: &str = "org.gnome.Shell.Extensions";
 /// GNOME Shell's `ExtensionState.ACTIVE`, reported as a double.
 const EXTENSION_ACTIVE: f64 = 1.0;
 const GNOME_METHOD_TIMEOUT: Duration = Duration::from_secs(2);
+const GNOME_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 /// A context fact to set, or one to withdraw so that `present` predicates no
 /// longer match it.
@@ -260,7 +262,8 @@ enum GnomeUpdate {
 /// `application.id` on GNOME, from Window Monitor Pro's focus signal.
 ///
 /// GNOME has no event socket like Hyprland's. The extension emits a D-Bus
-/// signal on every focus change, so nothing is polled. Without the extension
+/// signal on every focus change. Timed snapshots run only after temporary
+/// errors; a healthy source does not poll. Without the extension
 /// the fact is absent: the source follows GNOME Shell's extension state and
 /// sets or withdraws the fact as Window Monitor Pro is enabled, disabled or
 /// removed.
@@ -287,20 +290,21 @@ impl GnomeContextSource {
         // state changes and its focus signals in bus order.
         let messages = MessageIterator::from(&connection);
         let bus = DBusProxy::new(&connection).context("create the D-Bus daemon proxy")?;
-        for rule in [focus_rule()?, extension_rule()?] {
+        for rule in [focus_rule()?, extension_rule()?, shell_owner_rule()?] {
             bus.add_match_rule(rule)
                 .context("subscribe to GNOME Shell signals")?;
         }
-        let provider_active = window_monitor_active(&connection);
-        let application = provider_active
-            .then(|| focused_application(&connection))
-            .flatten();
+        let mut reader = GnomeReader {
+            shell: ShellOwner(None),
+            retry_at: None,
+        };
+        let (provider_active, application) = reader.snapshot(&connection);
         let (sender, receiver) = mpsc::channel();
         let signal = EventSignal::new().context("create GNOME context signal")?;
         let reader_signal = signal.try_clone().context("clone GNOME context signal")?;
         thread::Builder::new()
             .name("gnome-touchbar-context".into())
-            .spawn(move || run_gnome_reader(messages, &connection, &sender, &reader_signal))
+            .spawn(move || run_gnome_reader(messages, &connection, sender, &reader_signal, reader))
             .context("start GNOME context reader")?;
         log_gnome_provider(provider_active);
         let mut source = Self {
@@ -366,22 +370,83 @@ fn log_gnome_provider(active: bool) {
     if active {
         println!("context-source=gnome ready=true provider=window-monitor-pro");
     } else {
-        println!("context-source=gnome ready=false reason=window-monitor-pro-inactive");
+        println!("context-source=gnome ready=false");
+    }
+}
+
+/// The retry timer is armed only while a snapshot is uncertain. A confirmed
+/// inactive extension and a healthy source both wait solely for bus signals.
+struct GnomeReader {
+    shell: ShellOwner,
+    retry_at: Option<Instant>,
+}
+
+impl GnomeReader {
+    fn snapshot(&mut self, connection: &Connection) -> (bool, Option<String>) {
+        let result: zbus::Result<(bool, Option<String>)> = (|| {
+            self.shell.0 = shell_owner(connection)?;
+            let Some(owner) = self.shell.0.as_ref() else {
+                return Ok((false, None));
+            };
+            if !window_monitor_active(connection, owner)? {
+                return Ok((false, None));
+            }
+            Ok((true, focused_application(connection, owner)?))
+        })();
+        match result {
+            Ok(snapshot) => {
+                self.retry_at = None;
+                snapshot
+            }
+            Err(error) => {
+                eprintln!("context-source=gnome pending=true error={error:#}");
+                self.retry_at = Some(Instant::now() + GNOME_RETRY_DELAY);
+                // An uncertain snapshot never authorizes a shortcut in an old window.
+                (false, None)
+            }
+        }
     }
 }
 
 fn run_gnome_reader(
     messages: MessageIterator,
     connection: &Connection,
-    sender: &Sender<GnomeUpdate>,
+    sender: Sender<GnomeUpdate>,
     signal: &EventSignal,
+    mut reader: GnomeReader,
 ) {
-    let mut shell = ShellOwner(None);
-    for message in messages {
-        let Ok(message) = message else {
-            continue;
+    enum Next {
+        Message(Option<zbus::Result<Message>>),
+        Retry,
+    }
+    let mut messages = messages.into_inner();
+    loop {
+        let next = zbus::block_on(async {
+            match reader.retry_at {
+                Some(deadline) => {
+                    futures_lite::future::or(
+                        async {
+                            async_io::Timer::at(deadline).await;
+                            Next::Retry
+                        },
+                        async { Next::Message(messages.next().await) },
+                    )
+                    .await
+                }
+                None => Next::Message(messages.next().await),
+            }
+        });
+        let updates = match next {
+            Next::Message(Some(Ok(message))) => gnome_updates(&mut reader, &message),
+            Next::Message(Some(Err(_)) | None) => break,
+            Next::Retry => {
+                let (active, application) = reader.snapshot(connection);
+                vec![
+                    GnomeUpdate::Provider(active),
+                    GnomeUpdate::Focus(application),
+                ]
+            }
         };
-        let updates = gnome_updates(connection, &mut shell, &message);
         if updates.is_empty() {
             continue;
         }
@@ -393,15 +458,12 @@ fn run_gnome_reader(
         }
         signal.notify();
     }
-    // Also wake the event loop so a closed bus is observed.
+    // The event loop must observe disconnection as soon as this notification arrives.
+    drop(sender);
     signal.notify();
 }
 
-fn gnome_updates(
-    connection: &Connection,
-    shell: &mut ShellOwner,
-    message: &Message,
-) -> Vec<GnomeUpdate> {
+fn gnome_updates(reader: &mut GnomeReader, message: &Message) -> Vec<GnomeUpdate> {
     if message.message_type() != Type::Signal {
         return Vec::new();
     }
@@ -412,6 +474,35 @@ fn gnome_updates(
         return Vec::new();
     };
     let signal = (path.as_str(), interface.as_str(), member.as_str());
+    if signal
+        == (
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "NameOwnerChanged",
+        )
+    {
+        if header.sender().map(|sender| sender.as_str()) != Some("org.freedesktop.DBus") {
+            return Vec::new();
+        }
+        let Ok((name, _old, new)) = message.body().deserialize::<(String, String, String)>() else {
+            return Vec::new();
+        };
+        if name != GNOME_SHELL {
+            return Vec::new();
+        }
+        let owner = if new.is_empty() {
+            None
+        } else {
+            let Ok(owner) = OwnedUniqueName::try_from(new) else {
+                return Vec::new();
+            };
+            Some(owner)
+        };
+        reader.shell.0 = owner;
+        reader.retry_at = reader.shell.0.as_ref().map(|_| Instant::now());
+        // Clear before making any potentially slow calls to the replacement Shell.
+        return vec![GnomeUpdate::Provider(false)];
+    }
     let focus = signal
         == (
             WINDOW_MONITOR_PATH,
@@ -424,7 +515,11 @@ fn gnome_updates(
             SHELL_EXTENSIONS_INTERFACE,
             "ExtensionStateChanged",
         );
-    if !(focus || extension) || !shell.sent(connection, header.sender()) {
+    if !(focus || extension)
+        || !header
+            .sender()
+            .is_some_and(|sender| reader.shell.matches(sender))
+    {
         return Vec::new();
     }
     if focus {
@@ -446,11 +541,9 @@ fn gnome_updates(
         return Vec::new();
     }
     let active = extension_active(&info);
-    let mut updates = vec![GnomeUpdate::Provider(active)];
-    if active {
-        updates.push(GnomeUpdate::Focus(focused_application(connection)));
-    }
-    updates
+    reader.retry_at = active.then(Instant::now);
+    // Fetch the current focus in the reader after publishing the invalidation.
+    vec![GnomeUpdate::Provider(false)]
 }
 
 /// The unique name that owns org.gnome.Shell. Any client may address a signal
@@ -458,18 +551,6 @@ fn gnome_updates(
 struct ShellOwner(Option<OwnedUniqueName>);
 
 impl ShellOwner {
-    fn sent(&mut self, connection: &Connection, sender: Option<&UniqueName<'_>>) -> bool {
-        let Some(sender) = sender else {
-            return false;
-        };
-        if self.matches(sender) {
-            return true;
-        }
-        // Resolve again in case the shell restarted since the last signal.
-        self.0 = shell_owner(connection);
-        self.matches(sender)
-    }
-
     fn matches(&self, sender: &UniqueName<'_>) -> bool {
         self.0
             .as_ref()
@@ -477,9 +558,24 @@ impl ShellOwner {
     }
 }
 
-fn shell_owner(connection: &Connection) -> Option<OwnedUniqueName> {
-    let name = BusName::try_from(GNOME_SHELL).ok()?;
-    DBusProxy::new(connection).ok()?.get_name_owner(name).ok()
+fn shell_owner(connection: &Connection) -> zbus::Result<Option<OwnedUniqueName>> {
+    let name = BusName::try_from(GNOME_SHELL)?;
+    match DBusProxy::new(connection)?.get_name_owner(name) {
+        Ok(owner) => Ok(Some(owner)),
+        Err(zbus::fdo::Error::NameHasNoOwner(_)) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn shell_owner_rule() -> Result<MatchRule<'static>> {
+    Ok(MatchRule::builder()
+        .msg_type(Type::Signal)
+        .sender("org.freedesktop.DBus")?
+        .path("/org/freedesktop/DBus")?
+        .interface("org.freedesktop.DBus")?
+        .member("NameOwnerChanged")?
+        .arg(0, GNOME_SHELL)?
+        .build())
 }
 
 fn focus_rule() -> Result<MatchRule<'static>> {
@@ -503,29 +599,30 @@ fn extension_rule() -> Result<MatchRule<'static>> {
         .build())
 }
 
-fn window_monitor_active(connection: &Connection) -> bool {
-    Proxy::new(
+fn window_monitor_active(connection: &Connection, owner: &OwnedUniqueName) -> zbus::Result<bool> {
+    // Pin both snapshot calls to one unique owner, even if the well-known name changes.
+    let info: HashMap<String, OwnedValue> = Proxy::new(
         connection,
-        GNOME_SHELL,
+        owner.as_str(),
         SHELL_EXTENSIONS_PATH,
         SHELL_EXTENSIONS_INTERFACE,
-    )
-    .and_then(|proxy| {
-        proxy.call::<_, _, HashMap<String, OwnedValue>>("GetExtensionInfo", &(WINDOW_MONITOR_PRO,))
-    })
-    .is_ok_and(|info| extension_active(&info))
+    )?
+    .call("GetExtensionInfo", &(WINDOW_MONITOR_PRO,))?;
+    Ok(extension_active(&info))
 }
 
-fn focused_application(connection: &Connection) -> Option<String> {
+fn focused_application(
+    connection: &Connection,
+    owner: &OwnedUniqueName,
+) -> zbus::Result<Option<String>> {
     let proxy = Proxy::new(
         connection,
-        GNOME_SHELL,
+        owner.as_str(),
         WINDOW_MONITOR_PATH,
         WINDOW_MONITOR_INTERFACE,
-    )
-    .ok()?;
-    let class: String = proxy.call("FocusClass", &()).ok()?;
-    application_id(&class)
+    )?;
+    let class: String = proxy.call("FocusClass", &())?;
+    Ok(application_id(&class))
 }
 
 fn extension_active(info: &HashMap<String, OwnedValue>) -> bool {
@@ -818,25 +915,42 @@ mod tests {
         struct Desktop {
             extension_active: Arc<Mutex<bool>>,
             focused_class: Arc<Mutex<String>>,
+            fail_extension_info: Arc<Mutex<usize>>,
+            extension_queries: Arc<Mutex<Vec<Instant>>>,
         }
 
         struct FakeExtensions(Desktop);
 
         #[zbus::interface(name = "org.gnome.Shell.Extensions")]
         impl FakeExtensions {
-            fn get_extension_info(&self, uuid: &str) -> HashMap<String, OwnedValue> {
+            fn get_extension_info(
+                &self,
+                uuid: &str,
+            ) -> zbus::fdo::Result<HashMap<String, OwnedValue>> {
+                self.0
+                    .extension_queries
+                    .lock()
+                    .unwrap()
+                    .push(Instant::now());
+                let mut failures = self.0.fail_extension_info.lock().unwrap();
+                if *failures > 0 {
+                    *failures -= 1;
+                    return Err(zbus::fdo::Error::Failed(
+                        "temporary GNOME query failure".into(),
+                    ));
+                }
                 if uuid != WINDOW_MONITOR_PRO {
-                    return HashMap::new();
+                    return Ok(HashMap::new());
                 }
                 let state = if *self.0.extension_active.lock().unwrap() {
                     1.0
                 } else {
                     2.0
                 };
-                HashMap::from([(
+                Ok(HashMap::from([(
                     "state".to_owned(),
                     Value::from(state).try_to_owned().unwrap(),
-                )])
+                )]))
             }
         }
 
@@ -977,6 +1091,124 @@ mod tests {
             let (mut source, initial) = GnomeContextSource::start_on(bus.connect()).unwrap();
             assert_eq!(initial, None);
             shell.focus("7", "firefox_firefox");
+            assert!(quiet(&mut source));
+        }
+
+        #[test]
+        fn losing_shell_ownership_withdraws_the_last_application() {
+            let bus = PrivateBus::start();
+            let shell = FakeShell::start(&bus, true, "firefox_firefox");
+            let (mut source, initial) = GnomeContextSource::start_on(bus.connect()).unwrap();
+            assert_eq!(initial, set("firefox_firefox"));
+            shell.connection.release_name(GNOME_SHELL).unwrap();
+            assert_eq!(
+                next_change(&mut source),
+                cleared(),
+                "lost GNOME Shell retains a stale focus"
+            );
+        }
+
+        #[test]
+        fn a_transient_initial_query_failure_recovers_on_focus() {
+            let bus = PrivateBus::start();
+            let shell = FakeShell::start(&bus, true, "mpv");
+            *shell.desktop.fail_extension_info.lock().unwrap() = 1;
+            let (mut source, initial) = GnomeContextSource::start_on(bus.connect()).unwrap();
+            assert_eq!(initial, None);
+            shell.focus("7", "firefox_firefox");
+            assert_eq!(
+                next_change(&mut source),
+                set("firefox_firefox"),
+                "one failed query disables real focus updates"
+            );
+        }
+
+        #[test]
+        fn a_new_shell_owner_resnapshots_an_already_active_extension() {
+            let bus = PrivateBus::start();
+            let old = FakeShell::start(&bus, false, "firefox_firefox");
+            let (mut source, initial) = GnomeContextSource::start_on(bus.connect()).unwrap();
+            assert_eq!(initial, None);
+            old.connection.release_name(GNOME_SHELL).unwrap();
+            let _new = FakeShell::start(&bus, true, "Org.Gnome.Ptyxis");
+            assert_eq!(next_change(&mut source), set("org.gnome.ptyxis"));
+        }
+
+        #[test]
+        fn a_failed_initial_query_recovers_without_a_focus_event() {
+            let bus = PrivateBus::start();
+            let shell = FakeShell::start(&bus, true, "mpv");
+            *shell.desktop.fail_extension_info.lock().unwrap() = 1;
+            let (mut source, initial) = GnomeContextSource::start_on(bus.connect()).unwrap();
+            assert_eq!(initial, None);
+            assert_eq!(next_change(&mut source), set("mpv"));
+        }
+
+        #[test]
+        fn retries_are_bounded_and_stop_after_a_successful_snapshot() {
+            let bus = PrivateBus::start();
+            let shell = FakeShell::start(&bus, true, "mpv");
+            *shell.desktop.fail_extension_info.lock().unwrap() = 2;
+            let (mut source, initial) = GnomeContextSource::start_on(bus.connect()).unwrap();
+            assert_eq!(initial, None);
+            for _ in 0..32 {
+                shell.focus("7", "mpv");
+            }
+            assert_eq!(next_change(&mut source), set("mpv"));
+            let queries = shell.desktop.extension_queries.lock().unwrap().clone();
+            assert_eq!(queries.len(), 3);
+            for pair in queries.windows(2) {
+                assert!(
+                    pair[1].duration_since(pair[0]) >= Duration::from_millis(500),
+                    "focus traffic must not create a busy retry loop"
+                );
+            }
+            thread::sleep(Duration::from_millis(1200));
+            assert!(source.poll().unwrap().is_none());
+            assert_eq!(
+                shell.desktop.extension_queries.lock().unwrap().len(),
+                3,
+                "a healthy source must not keep polling GNOME"
+            );
+        }
+
+        #[test]
+        fn an_old_shell_owner_cannot_restore_focus_after_replacement() {
+            let bus = PrivateBus::start();
+            let old = FakeShell::start(&bus, true, "firefox_firefox");
+            let target = bus.connect();
+            let destination = target.unique_name().unwrap().to_string();
+            let (mut source, initial) = GnomeContextSource::start_on(target).unwrap();
+            assert_eq!(initial, set("firefox_firefox"));
+            old.connection.release_name(GNOME_SHELL).unwrap();
+            assert_eq!(next_change(&mut source), cleared());
+            let _new = FakeShell::start(&bus, true, "mpv");
+            assert_eq!(next_change(&mut source), set("mpv"));
+            emit_focus(&old.connection, Some(&destination), "7", "firefox_firefox");
+            assert!(quiet(&mut source));
+        }
+
+        #[test]
+        fn a_forged_owner_change_cannot_clear_real_focus() {
+            let bus = PrivateBus::start();
+            let shell = FakeShell::start(&bus, true, "mpv");
+            let target = bus.connect();
+            let destination = target.unique_name().unwrap().to_string();
+            let (mut source, initial) = GnomeContextSource::start_on(target).unwrap();
+            assert_eq!(initial, set("mpv"));
+            bus.connect()
+                .emit_signal(
+                    Some(destination.as_str()),
+                    "/org/freedesktop/DBus",
+                    "org.freedesktop.DBus",
+                    "NameOwnerChanged",
+                    &(
+                        GNOME_SHELL,
+                        shell.connection.unique_name().unwrap().as_str(),
+                        "",
+                    ),
+                )
+                .unwrap();
             assert!(quiet(&mut source));
         }
 

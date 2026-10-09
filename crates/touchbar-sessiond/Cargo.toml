@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-io.workspace = true
+futures-lite.workspace = true
 glow.workspace = true
 khronos-egl.workspace = true
 libc.workspace = true
