@@ -91,6 +91,23 @@ pub struct ActionEvent {
 }
 
 impl StateSnapshot {
+    pub fn validate(&self, description: &LogicDescription) -> Result<()> {
+        description.validate()?;
+        if self.0.len() > MAX_STATE_FIELDS {
+            bail!("too many state fields");
+        }
+        let mut budget = StateBudget::default();
+        for (name, value) in &self.0 {
+            let ty = description
+                .state
+                .get(name)
+                .ok_or_else(|| anyhow::anyhow!("undeclared state field {name}"))?;
+            budget.text(name)?;
+            validate_value(name, value, ty, &mut budget)?;
+        }
+        Ok(())
+    }
+
     /// Check the complete candidate snapshot before publishing any update.
     pub fn apply(&mut self, patch: &StatePatch, description: &LogicDescription) -> Result<bool> {
         description.validate()?;

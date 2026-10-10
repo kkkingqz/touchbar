@@ -3557,6 +3557,7 @@ dependencies = [
  "touchbar-plugin-supervisor",
  "touchbar-policy",
  "touchbar-protocol",
+ "touchbar-set-config",
  "touchbar-ui",
  "url",
  "wasmtime",

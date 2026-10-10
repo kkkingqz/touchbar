@@ -104,11 +104,11 @@ flatpak-spawn --host /usr/bin/bash -c \
 
 **Interfaces:** Consumes task 1. Produces `CompiledSet::new(SetDocument, &LogicDescription, HostLimits) -> anyhow::Result<Self>`, `CompiledSet::render(&StateSnapshot, Rect, Appearance, Duration, &PackageAssets) -> anyhow::Result<RetainedUi>`, `CompiledSet::action_for(&InputEvent) -> anyhow::Result<Option<ActionEvent>>`.
 
-- [ ] Написать `layout_order_changes_without_logic`, `missing_action_is_load_error`, `state_type_mismatch_is_load_error`, `repeated_keys_survive_reorder`, `removed_repeat_key_cancels_contact`. Assert порядок semantic nodes соответствует файлу; повторный ключ — ошибка; перестановка не переносит Activated на другой record.
-- [ ] Выполнить `tb_cargo test -p touchbar-plugin-host --test set_renderer`; новые проверки должны падать до renderer.
-- [ ] Реализовать containers/spaces/buttons/text/symbol/image/indicator/slider/scrubber/panels/list templates/canvas data на существующих Node/RetainedUi. Compile назначает стабильные widget IDs; таблица bindings учитывает keyed record и event kind. Bound properties читаются из state; renderer не вызывает broker/логику. Rebuild меняет UI только при изменении данных/layout/theme/viewport или текущей анимации.
-- [ ] Выполнить renderer tests и существующие UI/layout tests. Проверить прежние animation/effect/asset ограничения, без нового busy redraw.
-- [ ] Коммит: `feat: render button sets from declarative layouts`.
+- [x] Написать `layout_order_changes_without_logic`, `missing_action_is_load_error`, `state_type_mismatch_is_load_error`, `repeated_keys_survive_reorder`, `removed_repeat_key_cancels_contact`. Assert порядок semantic nodes соответствует файлу; повторный ключ — ошибка; перестановка не переносит Activated на другой record.
+- [x] Выполнить `tb_cargo test -p touchbar-plugin-host --test set_renderer`; новые проверки должны падать до renderer.
+- [x] Реализовать containers/spaces/buttons/text/symbol/image/indicator/slider/scrubber/panels/list templates/canvas data на существующих Node/RetainedUi. Compile назначает стабильные widget IDs; таблица bindings учитывает keyed record и event kind. Bound properties читаются из state; renderer не вызывает broker/логику. Rebuild меняет UI только при изменении данных/layout/theme/viewport или текущей анимации.
+- [x] Выполнить renderer tests и существующие UI/layout tests. Проверить прежние animation/effect/asset ограничения, без нового busy redraw.
+- [x] Коммит: `feat: render button sets from declarative layouts`.
 
 ### Task 4: Независимый Wasm runtime и безопасная доставка событий
 

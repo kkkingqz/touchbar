@@ -91,6 +91,8 @@ pub enum LayoutKind {
     Scrubber,
     Repeat,
     Canvas,
+    Responsive,
+    ShaderEffect,
     FixedSpace,
     FlexibleSpace,
 }
@@ -157,6 +159,59 @@ pub struct LayoutNode {
     pub repeat_key: Option<String>,
     pub template: Option<Box<LayoutNode>>,
     pub canvas_from: Option<String>,
+    #[serde(default)]
+    pub variants: Vec<ResponsiveDefinition>,
+    pub effect: Option<EffectDefinition>,
+    pub motion: Option<MotionDefinition>,
+    pub selected_from: Option<String>,
+    pub pressed_from: Option<String>,
+    pub hold_ms: Option<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResponsiveDefinition {
+    pub representation: String,
+    pub minimum_width: f32,
+    pub layout: Box<LayoutNode>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ScalarBinding {
+    Number(f64),
+    State(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectDefinition {
+    pub id: u64,
+    pub source: String,
+    #[serde(default)]
+    pub parameters: Vec<ScalarBinding>,
+    pub period_ms: Option<u32>,
+    pub opacity: Option<f32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransformDefinition {
+    pub x: Option<ScalarBinding>,
+    pub y: Option<ScalarBinding>,
+    pub scale: Option<ScalarBinding>,
+    pub opacity: Option<ScalarBinding>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MotionDefinition {
+    pub id: u64,
+    pub duration_ms: u32,
+    pub easing: String,
+    pub playback: String,
+    pub from: TransformDefinition,
+    pub to: TransformDefinition,
 }
 
 impl SetDocument {
@@ -422,6 +477,59 @@ fn validate_node(node: &LayoutNode, depth: usize, budget: &mut LayoutBudget) -> 
     if node.canvas_from.is_some() && node.kind != LayoutKind::Canvas {
         bail!("canvas binding requires a canvas node");
     }
+    if node.hold_ms.is_some_and(|ms| !(1..=60_000).contains(&ms)) {
+        bail!("hold duration outside bounds");
+    }
+    if node.kind == LayoutKind::Responsive {
+        if node.variants.is_empty() || node.variants.len() > 4 {
+            bail!("responsive requires 1..4 variants");
+        }
+        let mut representations = BTreeSet::new();
+        for variant in &node.variants {
+            if !matches!(
+                variant.representation.as_str(),
+                "hidden" | "minimal" | "compact" | "full"
+            ) || !representations.insert(&variant.representation)
+                || !variant.minimum_width.is_finite()
+                || !(0.0..=MAX_DIMENSION).contains(&variant.minimum_width)
+            {
+                bail!("invalid responsive variant");
+            }
+            validate_node(&variant.layout, depth + 1, budget)?;
+        }
+    } else if !node.variants.is_empty() {
+        bail!("variants require responsive node");
+    }
+    if node.kind == LayoutKind::ShaderEffect {
+        let effect = node
+            .effect
+            .as_ref()
+            .context("shader-effect requires effect")?;
+        if effect.id == 0
+            || effect.source.len() > 4096
+            || effect.parameters.len() > 8
+            || effect
+                .period_ms
+                .is_some_and(|ms| !(100..=60_000).contains(&ms))
+            || effect
+                .opacity
+                .is_some_and(|v| !v.is_finite() || !(0.0..=1.0).contains(&v))
+        {
+            bail!("invalid shader effect definition");
+        }
+        budget.text += effect.source.len();
+    } else if node.effect.is_some() {
+        bail!("effect requires shader-effect node");
+    }
+    if let Some(motion) = &node.motion
+        && (motion.id == 0
+            || motion.duration_ms == 0
+            || motion.duration_ms > 60_000
+            || !matches!(motion.easing.as_str(), "linear" | "ease-in-out")
+            || !matches!(motion.playback.as_str(), "once" | "loop" | "alternate"))
+    {
+        bail!("invalid motion definition");
+    }
     for child in &node.children {
         validate_node(child, depth + 1, budget)?;
     }
@@ -460,6 +568,8 @@ fn validate_node_bindings(
     for (binding, expected) in [
         (&node.enabled_from, ScalarType::Bool),
         (&node.visible_from, ScalarType::Bool),
+        (&node.selected_from, ScalarType::Bool),
+        (&node.pressed_from, ScalarType::Bool),
         (&node.label_from, ScalarType::Text),
         (&node.text_from, ScalarType::Text),
         (&node.symbol_from, ScalarType::Text),
@@ -499,6 +609,38 @@ fn validate_node_bindings(
     }
     for child in &node.children {
         validate_node_bindings(child, description, record)?;
+    }
+    for variant in &node.variants {
+        validate_node_bindings(&variant.layout, description, record)?;
+    }
+    let mut scalars = Vec::new();
+    if let Some(effect) = &node.effect {
+        scalars.extend(effect.parameters.iter());
+    }
+    if let Some(motion) = &node.motion {
+        for transform in [&motion.from, &motion.to] {
+            scalars.extend(
+                [
+                    &transform.x,
+                    &transform.y,
+                    &transform.scale,
+                    &transform.opacity,
+                ]
+                .into_iter()
+                .flatten(),
+            );
+        }
+    }
+    for scalar in scalars {
+        match scalar {
+            ScalarBinding::Number(value) if !value.is_finite() => bail!("non-finite scalar"),
+            ScalarBinding::State(path)
+                if binding_type(path, description, record)? != ScalarType::Number =>
+            {
+                bail!("numeric binding expected")
+            }
+            _ => {}
+        }
     }
     if let Some(template) = &node.template {
         let source = node.repeat_from.as_deref().unwrap();

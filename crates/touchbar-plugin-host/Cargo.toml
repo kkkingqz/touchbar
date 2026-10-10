@@ -19,6 +19,7 @@ touchbar-plugin-supervisor = { path = "../touchbar-plugin-supervisor" }
 touchbar-policy = { path = "../touchbar-policy" }
 touchbar-protocol = { path = "../touchbar-protocol" }
 touchbar-ui = { path = "../touchbar-ui" }
+touchbar-set-config = { path = "../touchbar-set-config" }
 toml.workspace = true
 url.workspace = true
 wasmtime.workspace = true

@@ -57,6 +57,8 @@ pub mod bindings {
     });
 }
 
+pub mod sets;
+
 pub mod appearance_provider_bindings {
     wasmtime::component::bindgen!({
         path: "../../wit",
