@@ -1,6 +1,6 @@
 # First-party pack vertical slices
 
-Five sandboxed Component packs now exercise the fresh v1 package, UI, broker, install, and daemon
+Seven sandboxed button-set logic packs now exercise the fresh v1 package, UI, broker, install, and daemon
 lifecycle. They are deliberately small vertical slices, not claims that every integration listed in
 the product research is complete.
 
@@ -10,12 +10,13 @@ the product research is complete.
 | App Actions | browser navigation, text formatting | typed `keyboard.shortcut.v1` chords bound to the focused application, pressed through the RemoteDesktop portal |
 | Media | now playing, transport, timeline | typed `media.read.v1`/`media.control.v1` MPRIS session, live metadata and position, transport, scrubbing |
 | Hyprland Navigator | workspaces, window actions, move window | context disclosure, workspace scrubbers, typed `hyprctl` templates |
-| Capture Studio | screenshots, recording, capture tools | multi-action palettes, destructive recording state, long-running commands |
+| Capture Studio | screenshots, recording, capture tools | multi-action palettes, destructive recording state, scoped framed local capture service |
+| Omarchy | screensaver, theme palette; separate appearance provider | bounded OLED drawing records, validated shader effects and host-timed motion |
 | Command Deck | desktop menu, launchers, session, custom actions | fixed safe actions, hold confirmation, user-owned local action service |
 
-Every color in these packs is a semantic theme role. Text contrast, fills, progress tracks,
+Controls use semantic theme roles; Omarchy projects its lit colors from the current semantic theme over an opaque black OLED bed. Text contrast, fills, progress tracks,
 pressable backgrounds, destructive state, and accent state are re-resolved by the host after every
-theme snapshot. No pack caches raw host-theme colors.
+theme snapshot. Omarchy recomputes its drawing colors on theme/context changes.
 
 Every pack passes `touchbarctl plugin check` and headless host rendering for every contribution at 80,
 160, 320, 1004, and 2008 pixels plus declared presentation widths. Build all package artifacts with:
@@ -40,3 +41,10 @@ Command Deck custom actions already use
 the intended boundary: the component connects only to a user-approved logical endpoint speaking
 `io.github.cameroncooper.touchbar.command-deck.v1`; the user-owned service remains free to implement arbitrary
 actions without granting an interpreter to the sandbox.
+
+Each of the 23 primary sets has one explicitly referenced file in `sets/`.
+The package's shared `src/logic.rs` (or action module) owns behavior, and
+`touchbar-logic-sdk` contains common engine adapters. Rendering lives in the
+native host. Shared Wasm never implies shared state: the runtime creates one
+Store and broker connection per selected set. See [button sets](button-sets.md).
+The Omarchy appearance provider is still its separate original component.

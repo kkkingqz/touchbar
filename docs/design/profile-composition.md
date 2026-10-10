@@ -237,3 +237,27 @@ independent GPU clients, proves that two packages may both expose local item
 falls back when a required client disappears, exposes a host-owned placeholder
 in both pixels and machine-readable status, and removes it while restoring the
 configured profile after that identity reconnects.
+
+## Explicit profile fragments
+
+A version-1 root can declare `include = ["profiles.d/default.toml",
+"profiles.d/browser.toml"]`. Paths are normalized and relative to that root.
+Fragments have `version = 1` and may contain profiles, contributions, rules and
+regions. The root owns `fallback`; fragments cannot include more files or set a
+fallback. Arrays are merged in declared include order, then normal duplicate-ID
+and reference validation applies to the whole document.
+
+The loader rejects symlinks in every path component, nonregular or multiply
+linked files, unexpected ownership, writable group/other modes and oversized
+graphs (64 files, 256 KiB per file, 1 MiB total). It watches the root and all
+sources, including nearest parent directories of missing new fragments. Atomic
+file or directory replacement re-arms those watches. Manual reload and watched
+reload use the same transaction: any missing/invalid fragment preserves the
+complete last-good document and catalog. A valid later save applies the complete
+new graph. The GNOME example in `config/profiles-gnome.toml.example` demonstrates
+root includes; copy its accompanying fragments and remove the `.example` suffix.
+
+For button-set packages, `[selection]` in a set file derives the local automatic
+profile described above; the manifest's legacy `[[profile]]` remains supported.
+Optional package `priority` determines ordering among package rules while user
+rules remain above them.

@@ -17,10 +17,13 @@ thread_local! {
 }
 
 fn patch() -> wire::StatePatch {
-    patch_to_wit(&StatePatch(BTreeMap::from([(
-        "count".into(),
-        StateValue::Number(COUNT.get()),
-    )])))
+    patch_to_wit(&StatePatch(BTreeMap::from([
+        ("count".into(), StateValue::Number(COUNT.get())),
+        (
+            "count_text".into(),
+            StateValue::Text(format!("{:.0}", COUNT.get())),
+        ),
+    ])))
 }
 
 fn unchanged() -> wire::LogicUpdate {
@@ -48,7 +51,10 @@ impl Guest for Counter {
                     value_type: None,
                 },
             )]),
-            state: BTreeMap::from([("count".into(), StateType::Number)]),
+            state: BTreeMap::from([
+                ("count".into(), StateType::Number),
+                ("count_text".into(), StateType::Text),
+            ]),
         })
     }
 

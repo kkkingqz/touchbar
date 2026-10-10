@@ -1,0 +1,18 @@
+manifest_version = 1
+[plugin]
+name = "Shared Counter Logic"
+version = "0.1.0"
+description = "Two separately instantiated layouts share one logic module"
+license = "MIT OR Apache-2.0"
+source = "github:example/shared-counter"
+api = "^1.0"
+[runtime]
+kind = "button-set-logic"
+entrypoint = "component/plugin.wasm"
+world = "touchbar:plugin/button-set-logic@1.0.0"
+[[sets]]
+id = "counter"
+file = "sets/counter.toml"
+[[sets]]
+id = "compact-counter"
+file = "sets/compact-counter.toml"

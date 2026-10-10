@@ -1,0 +1,14 @@
+version = 1
+id = "compact-counter"
+label = "Compact Counter"
+logic_config = "counter"
+default_width = 120
+[layout]
+kind = "button"
+widget_id = 10
+label = "Increment compact counter"
+on_activate = "increment"
+text_from = "count_text"
+font_size = 18
+background = "accent"
+color = "on-accent"

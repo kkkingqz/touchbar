@@ -135,3 +135,21 @@ fn original_buttons_and_identical_wasm_have_independent_capabilities() {
     }
     assert!(requests.recv_host().is_err());
 }
+#[test]
+fn denied_set_cannot_issue_shortcut() {
+    let (mut host, server) = open(document("browser"), false);
+    assert!(ids(&mut host, "browser", 240.0).is_empty());
+    touch(&mut host, "browser", 10, InputKind::Pressed);
+    touch(&mut host, "browser", 10, InputKind::Activated);
+    touch(&mut host, "browser", 10, InputKind::Released);
+    let mut fd = libc::pollfd {
+        fd: server.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    assert_eq!(unsafe { libc::poll(&mut fd, 1, 100) }, 0);
+    assert_eq!(
+        host.snapshot().0["shortcuts_available"],
+        StateValue::Bool(false)
+    );
+}

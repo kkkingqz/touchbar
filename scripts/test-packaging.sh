@@ -21,7 +21,7 @@ cargo build --locked --release --manifest-path "$project_dir/Cargo.toml" \
 # Plugin packages contain their compiled Wasm component. Always refresh every
 # first-party package before lifecycle tests so a protocol rename cannot leave
 # a source-clean tree shipping stale guest imports.
-for pack in controls media hyprland capture command-deck; do
+for pack in app-actions controls media hyprland capture command-deck omarchy; do
     "$project_dir/target/release/touchbarctl" plugin build \
         --package "$project_dir/plugins/$pack"
     "$project_dir/target/release/touchbarctl" plugin check \
@@ -101,6 +101,7 @@ done
 "$project_dir/scripts/test-component-presentations.sh"
 "$project_dir/scripts/test-component-host.sh" >/dev/null
 "$project_dir/scripts/test-supervised-button-sets.sh"
+"$project_dir/scripts/test-button-set-authoring.sh"
 "$project_dir/scripts/test-plugin-scaffold.sh"
 "$project_dir/scripts/test-session-permission-live.sh"
 "$project_dir/scripts/test-canvas-component-ui.sh"

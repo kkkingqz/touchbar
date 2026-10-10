@@ -2,11 +2,24 @@
 
 TouchBar packs are immutable local packages. A pack may contribute multiple stable items. The default runtime is a WebAssembly component; it has no ambient operating-system access and reaches the desktop only through explicitly requested, user-approved broker capabilities.
 
+For new button packs use the three-layer `button-set-logic` runtime: native
+engine, shared Wasm interaction logic, separate `sets/*.toml` descriptions.
+Register each file explicitly with `[[sets]] { id, file }` in the manifest.
+Actions and state bindings are checked against the module's `describe` contract.
+A description can reuse existing logic without a Wasm build; every set still
+owns independent state, subscriptions and broker requests. The concrete engine
+API lives in `touchbar_logic_sdk::engine::ENGINE` and preserves existing grants.
+See `docs/design/button-sets.md` and the runnable `examples/button-set-logic`.
+
+The following `[[items]]`/`[[profile]]` example describes the compatible legacy
+component format. Button-set descriptions instead put context predicates in
+`[selection]`; their `priority` orders package rules below explicit user rules.
+
 Packages may own bounded automatic profiles for their own items. This is the
 zero-configuration path for an application integration: declare a `[[profile]]`
 with exact `applications` and/or foreground-layer `activities`, and the host
 merges it in memory when the plugin is enabled. The package cannot reference
-another package's item, inspect arbitrary context, choose a competing priority,
+another package's item, inspect arbitrary context, override user priorities,
 or rewrite `profiles.toml`. User rules always take precedence.
 
 ```toml
@@ -99,7 +112,7 @@ without changing the user's installed plugins or profile configuration. The
 target window must actually become focused: the runner checks the observed
 context transition and fails if a launcher merely creates an unfocused window.
 
-Use the bounded `Canvas2d` SDK node for custom graphs, indicators, drawings,
+Legacy components use the bounded `Canvas2d` SDK node for custom graphs, indicators, drawings,
 and other portable GPU content. Give it a local view box and let the host scale
 and clip it to the assigned region. Prefer `theme_paint` or
 `theme_paint_with_opacity` for text, strokes, fills, and tint-like effects so a
@@ -277,3 +290,9 @@ Use `touchbarctl plugin search` for the bundled reviewed catalog. Catalog
 aliases are conveniences only: direct GitHub URLs always work, and installed
 state, updates, grants, and rollback remain keyed by canonical repository
 identity.
+
+Button-set layouts express canvas records, responsive variants, motion and
+validated effects as data. Logic returns state, not `ViewBuilder` trees.
+Production set files are digest-verified and sealed alongside Wasm/assets;
+source edits cannot override a running sealed description. User profile roots
+may include ordered, explicitly named fragments, with atomic last-good reload.

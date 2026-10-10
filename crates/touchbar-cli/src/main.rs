@@ -452,9 +452,9 @@ fn context(args: &[String]) -> Result<()> {
         Format::Json => println!(
             "{}",
             serde_json::to_string_pretty(&json!({
-                "manifest_version": 1, "host_api": touchbar_package::SUPPORTED_HOST_API_VERSION, "component_world": touchbar_package::SUPPORTED_COMPONENT_WORLD,
+                "manifest_version": 1, "host_api": touchbar_package::SUPPORTED_HOST_API_VERSION, "component_world": touchbar_package::SUPPORTED_COMPONENT_WORLD, "button_set_world": touchbar_package::SUPPORTED_BUTTON_SET_WORLD,
                 "commands": ["new", "build", "context", "check", "test", "replay", "dev", "run", "pack", "release-check", "publish", "install", "add", "update", "rollback", "search", "catalog-check", "submit", "list", "inspect", "permissions", "permission", "enable", "disable", "item", "profile", "remove"],
-                "principles": ["stable item ids", "responsive rendering through 2008 pixels", "package-local automatic profiles", "permission-scoped appearance providers", "package-local presentation bars", "presentation width matrices", "theme roles", "sealed logical assets", "semantic image tint", "stable animation ids", "host-timed animations", "bounded validated GPU effects", "brokered capabilities", "scope-checked offline broker fixtures", "headless tests"]
+                "principles": ["separate set descriptions and logic", "explicit set references", "shared code with instance-local state", "sealed layout files", "profile includes with atomic reload", "stable item ids", "responsive rendering through 2008 pixels", "package-local automatic profiles", "permission-scoped appearance providers", "package-local presentation bars", "presentation width matrices", "theme roles", "sealed logical assets", "semantic image tint", "stable animation ids", "host-timed animations", "bounded validated GPU effects", "brokered capabilities", "scope-checked offline broker fixtures", "headless tests"]
             }))?
         ),
     }

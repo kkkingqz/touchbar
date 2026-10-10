@@ -55,10 +55,19 @@ fn same_component_separate_stores() {
         .unwrap();
     a.handle_event(&event("counter-a", InputKind::Activated))
         .unwrap();
-    assert_eq!(a.snapshot().0.get("count"), Some(&StateValue::Number(1.0)));
+    assert_eq!(
+        a.snapshot().0,
+        BTreeMap::from([
+            ("count".into(), StateValue::Number(1.0)),
+            ("count_text".into(), StateValue::Text("1".into())),
+        ])
+    );
     assert_eq!(
         b.snapshot().0,
-        BTreeMap::from([("count".into(), StateValue::Number(0.0))])
+        BTreeMap::from([
+            ("count".into(), StateValue::Number(0.0)),
+            ("count_text".into(), StateValue::Text("0".into())),
+        ])
     );
     assert!(
         a.handle_event(&event("counter-b", InputKind::Activated))

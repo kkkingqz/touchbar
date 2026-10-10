@@ -104,3 +104,25 @@ Commit messages explain why a change was made, not only what changed. The
 project follows a greenfield v1 rule while unpublished: superseded APIs and
 formats are changed in place and removed completely rather than kept behind
 compatibility shims.
+
+## Button packs and profile fragments
+
+Use the [three-layer authoring contract](docs/design/button-sets.md): native
+rendering and broker operations, shared Wasm interaction modules, and one
+explicitly registered TOML description per set. Keep state and resources local
+to the instance even when two descriptions use identical code. A layout-only
+edit needs `plugin check`/`pack`, with no Wasm build. Added actions require a build.
+The two-counter package in `examples/button-set-logic` is a runnable example.
+
+`./scripts/build-first-party-packs.sh` builds and checks all seven first-party
+packs, including App Actions and Omarchy. It also builds separately declared
+appearance providers. Both logic-only and legacy component worlds remain valid.
+First-party Wasm updates should be intentional migration/release artifacts;
+avoid committing rebuilt unrelated example components.
+
+`./scripts/test-packaging.sh` includes sealed-set and authoring acceptance,
+legacy launches, profile include/reload, permissions, presentations, effects and
+asset lifecycle. These tests use temporary stores and delegated test scopes.
+They validate packaging without installing a persistent service. Run supervisor
+and ignored security tests on the host login session, as described above;
+container compilation alone does not verify host confinement.
