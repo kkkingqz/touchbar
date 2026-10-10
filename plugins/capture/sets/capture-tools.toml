@@ -1,0 +1,59 @@
+version = 1
+id = "capture-tools"
+label = "Capture Tools"
+default_width = 160
+show_in_default_profile = true
+logic_config = "capture-tools"
+
+[layout]
+kind = "row"
+spacing = 4
+padding = 2
+
+[[layout.children]]
+kind = "button"
+widget_id = 20
+label = "OCR"
+on_activate = "button-20"
+minimum = 40
+width = 70
+maximum = 300
+grow = 1
+enabled_from = "local_available"
+
+[[layout.children.children]]
+kind = "text"
+text = "OCR"
+font_size = 11
+
+[[layout.children]]
+kind = "button"
+widget_id = 21
+label = "QR"
+on_activate = "button-21"
+minimum = 40
+width = 70
+maximum = 300
+grow = 1
+enabled_from = "local_available"
+
+[[layout.children.children]]
+kind = "text"
+text = "QR"
+font_size = 11
+
+[[layout.children]]
+kind = "button"
+widget_id = 22
+label = "COLOR"
+on_activate = "button-22"
+minimum = 40
+width = 70
+maximum = 300
+grow = 1
+enabled_from = "local_available"
+
+[[layout.children.children]]
+kind = "text"
+text = "COLOR"
+font_size = 11

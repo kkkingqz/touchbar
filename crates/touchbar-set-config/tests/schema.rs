@@ -377,3 +377,12 @@ fn total_state_text_budget_applies_across_updates() {
     );
     assert_eq!(state, before);
 }
+#[test]
+fn nonfinite_toml_values_are_rejected_before_normalization() {
+    for value in ["nan", "inf", "-inf"] {
+        let source = format!(
+            "version = 1\nid = \"paint\"\nlabel = \"Paint\"\n[layout]\nkind = \"text\"\nwidth = {value}\n"
+        );
+        assert!(SetDocument::from_toml(&source).is_err(), "{value}");
+    }
+}

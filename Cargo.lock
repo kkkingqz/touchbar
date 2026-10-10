@@ -3428,6 +3428,8 @@ name = "touchbar-first-party-capture"
 version = "0.1.0"
 dependencies = [
  "touchbar-component-sdk",
+ "touchbar-logic-sdk",
+ "touchbar-set-config",
 ]
 
 [[package]]
@@ -3435,6 +3437,8 @@ name = "touchbar-first-party-command-deck"
 version = "0.1.0"
 dependencies = [
  "touchbar-component-sdk",
+ "touchbar-logic-sdk",
+ "touchbar-set-config",
 ]
 
 [[package]]
@@ -3451,6 +3455,8 @@ name = "touchbar-first-party-hyprland"
 version = "0.1.0"
 dependencies = [
  "touchbar-component-sdk",
+ "touchbar-logic-sdk",
+ "touchbar-set-config",
 ]
 
 [[package]]
@@ -3467,6 +3473,8 @@ name = "touchbar-first-party-omarchy"
 version = "0.1.0"
 dependencies = [
  "touchbar-component-sdk",
+ "touchbar-logic-sdk",
+ "touchbar-set-config",
 ]
 
 [[package]]
@@ -3699,6 +3707,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde",
+ "serde_json",
  "toml",
 ]
 

@@ -1,0 +1,13 @@
+version = 1
+id = "palette"
+label = "Theme Palette"
+default_width = 160
+show_in_default_profile = false
+logic_config = "palette"
+
+[layout]
+kind = "canvas"
+label = "Resolved theme palette"
+canvas_from = "palette"
+width = 100
+height = 20

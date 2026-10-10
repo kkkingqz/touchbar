@@ -539,3 +539,96 @@ fn panel_layout_has_its_own_bindings_and_cancels_primary_contact() {
     fresh.kind = InputKind::Activated;
     assert_eq!(set.action_for(&fresh).unwrap().unwrap().action, "select");
 }
+
+#[test]
+fn color_role_bindings_require_declared_text() {
+    let document = SetDocument::from_toml(
+        r#"
+version = 1
+id = "paint"
+label = "Paint"
+[layout]
+kind = "button"
+color_from = "foreground"
+background_from = "background"
+"#,
+    )
+    .unwrap();
+    let description = LogicDescription {
+        state: BTreeMap::from([
+            ("foreground".into(), StateType::Text),
+            ("background".into(), StateType::Text),
+        ]),
+        ..Default::default()
+    };
+    document.validate_bindings(&description).unwrap();
+}
+#[test]
+fn rgba_canvas_records_validate_all_channels() {
+    use touchbar_ui::Primitive;
+    let source = "version = 1\nid = \"buttons\"\nlabel = \"Canvas\"\n[layout]\nkind = \"canvas\"\ncanvas_from = \"commands\"\ncolor = \"accent\"\n";
+    let mut desc = description();
+    let fields = ["x", "y", "width", "height", "r", "g", "b", "a"]
+        .into_iter()
+        .map(|name| (name.into(), ScalarType::Number))
+        .chain([
+            ("id".into(), ScalarType::Text),
+            ("op".into(), ScalarType::Text),
+        ])
+        .collect();
+    desc.state.insert(
+        "commands".into(),
+        StateType::List {
+            key: "id".into(),
+            fields,
+        },
+    );
+    let set = CompiledSet::new(
+        SetDocument::from_toml(source).unwrap(),
+        &desc,
+        HostLimits::default(),
+    )
+    .unwrap();
+    let record = StateRecord(BTreeMap::from([
+        ("id".into(), ScalarValue::Text("r1".into())),
+        ("op".into(), ScalarValue::Text("rect".into())),
+        ("x".into(), ScalarValue::Number(2.0)),
+        ("y".into(), ScalarValue::Number(3.0)),
+        ("width".into(), ScalarValue::Number(10.0)),
+        ("height".into(), ScalarValue::Number(12.0)),
+        ("r".into(), ScalarValue::Number(1.0)),
+        ("g".into(), ScalarValue::Number(0.0)),
+        ("b".into(), ScalarValue::Number(0.0)),
+        ("a".into(), ScalarValue::Number(1.0)),
+    ]));
+    let mut state = state(&[]);
+    state
+        .0
+        .insert("commands".into(), StateValue::List(vec![record]));
+    let bounds = Rect::new(0.0, 0.0, 300.0, 60.0);
+    let mut ui = set
+        .render(
+            &state,
+            bounds,
+            Appearance::default(),
+            Duration::ZERO,
+            &PackageAssets::default(),
+        )
+        .unwrap();
+    let resolved = ui.resolve(bounds, Theme::default());
+    assert!(resolved.scene.primitives.iter().any(|primitive| matches!(primitive,
+        Primitive::RoundedRect { rect, color, .. } if *rect == Rect::new(2.0, 3.0, 10.0, 12.0) && *color == touchbar_ui::Color::rgba(1.0,0.0,0.0,1.0))));
+    if let StateValue::List(records) = state.0.get_mut("commands").unwrap() {
+        records[0].0.insert("r".into(), ScalarValue::Number(2.0));
+    }
+    assert!(
+        set.render(
+            &state,
+            bounds,
+            Appearance::default(),
+            Duration::ZERO,
+            &PackageAssets::default()
+        )
+        .is_err()
+    );
+}

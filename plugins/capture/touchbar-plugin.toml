@@ -9,49 +9,21 @@ source = "github:cameroncooper/touchbar-capture"
 api = "^1.0"
 
 [runtime]
-kind = "component"
+kind = "button-set-logic"
 entrypoint = "component/plugin.wasm"
-world = "touchbar:plugin/plugin@1.0.0"
+world = "touchbar:plugin/button-set-logic@1.0.0"
 
-[[items]]
+[[sets]]
 id = "screenshots"
-label = "Screenshots"
-expanded_bar = "capture-palette"
-[[items]]
+file = "sets/screenshots.toml"
+
+[[sets]]
 id = "recording"
-label = "Recording"
-[[items]]
+file = "sets/recording.toml"
+
+[[sets]]
 id = "capture-tools"
-label = "Capture Tools"
-
-[[bar]]
-id = "capture-palette"
-minimum_width = 240
-preferred_width = 480
-maximum_width = 720
-dismiss_on_selection = true
-principal_item = "screenshots"
-
-[[bar.element]]
-kind = "item"
-item = "screenshots"
-minimum_width = 80
-preferred_width = 160
-maximum_width = 240
-
-[[bar.element]]
-kind = "item"
-item = "recording"
-minimum_width = 80
-preferred_width = 160
-maximum_width = 240
-
-[[bar.element]]
-kind = "item"
-item = "capture-tools"
-minimum_width = 80
-preferred_width = 160
-maximum_width = 240
+file = "sets/capture-tools.toml"
 
 [[permission]]
 capability = "local.connect.v1"

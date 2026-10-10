@@ -1,0 +1,59 @@
+version = 1
+id = "launchers"
+label = "Launchers"
+default_width = 160
+show_in_default_profile = true
+logic_config = "launchers"
+
+[layout]
+kind = "row"
+spacing = 4
+padding = 2
+
+[[layout.children]]
+kind = "button"
+widget_id = 10
+label = "TERMINAL"
+on_activate = "button-10"
+minimum = 40
+width = 80
+maximum = 300
+grow = 1
+enabled_from = "command_available"
+
+[[layout.children.children]]
+kind = "text"
+text = "TERMINAL"
+font_size = 11
+
+[[layout.children]]
+kind = "button"
+widget_id = 11
+label = "APPS"
+on_activate = "button-11"
+minimum = 40
+width = 80
+maximum = 300
+grow = 1
+enabled_from = "local_available"
+
+[[layout.children.children]]
+kind = "text"
+text = "APPS"
+font_size = 11
+
+[[layout.children]]
+kind = "button"
+widget_id = 12
+label = "Diagnostic probe"
+on_activate = "button-12"
+minimum = 40
+width = 80
+maximum = 300
+grow = 1
+enabled_from = "command_available"
+
+[[layout.children.children]]
+kind = "text"
+text_from = "probe_label"
+font_size = 11

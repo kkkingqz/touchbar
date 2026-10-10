@@ -1,0 +1,105 @@
+version = 1
+id = "screenshots"
+label = "Screenshots"
+default_width = 160
+show_in_default_profile = true
+logic_config = "screenshots"
+expanded_panel = "capture-palette"
+
+[layout]
+kind = "row"
+spacing = 4
+padding = 2
+
+[[layout.children]]
+kind = "button"
+widget_id = 1
+label = "SMART"
+on_activate = "button-1"
+minimum = 40
+width = 80
+maximum = 260
+grow = 1
+enabled_from = "local_available"
+
+[[layout.children.children]]
+kind = "text"
+text = "SMART"
+font_size = 11
+
+[[layout.children]]
+kind = "button"
+widget_id = 2
+label = "REGION"
+on_activate = "button-2"
+minimum = 40
+width = 80
+maximum = 260
+grow = 1
+enabled_from = "local_available"
+
+[[layout.children.children]]
+kind = "text"
+text = "REGION"
+font_size = 11
+
+[[layout.children]]
+kind = "button"
+widget_id = 3
+label = "WINDOW"
+on_activate = "button-3"
+minimum = 40
+width = 80
+maximum = 260
+grow = 1
+enabled_from = "local_available"
+
+[[layout.children.children]]
+kind = "text"
+text = "WINDOW"
+font_size = 11
+
+[[layout.children]]
+kind = "button"
+widget_id = 4
+label = "FULL"
+on_activate = "button-4"
+minimum = 40
+width = 80
+maximum = 260
+grow = 1
+enabled_from = "local_available"
+
+[[layout.children.children]]
+kind = "text"
+text = "FULL"
+font_size = 11
+
+[[panels]]
+id = "capture-palette"
+minimum_width = 240
+preferred_width = 480
+maximum_width = 720
+dismiss_on_selection = true
+principal_item = "screenshots"
+
+[[panels.element]]
+kind = "item"
+item = "screenshots"
+minimum_width = 80
+preferred_width = 160
+maximum_width = 240
+
+[[panels.element]]
+kind = "item"
+item = "recording"
+minimum_width = 80
+preferred_width = 160
+maximum_width = 240
+
+[[panels.element]]
+kind = "item"
+item = "capture-tools"
+minimum_width = 80
+preferred_width = 160
+maximum_width = 240

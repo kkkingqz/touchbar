@@ -245,6 +245,12 @@ impl ButtonSetHost {
         &mut self,
         event: ComponentPresentationEvent,
     ) -> Result<ComponentUpdate> {
+        if matches!(event, ComponentPresentationEvent::Ended(_)) {
+            self.compiled.cancel_contacts()?;
+            for cancelled in self.compiled.drain_cancelled() {
+                self.deliver_action(cancelled, None, false)?;
+            }
+        }
         self.refuel()?;
         self.store.data_mut().phase = Some(CallbackPhase::HostEvent);
         let event = match event {

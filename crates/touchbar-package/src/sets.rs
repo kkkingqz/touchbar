@@ -133,7 +133,10 @@ pub fn resolve_set_catalog(
         if let Some(selection) = &document.selection {
             catalog.profiles.push(AutomaticProfile {
                 id: document.id.clone(),
-                label: document.label.clone(),
+                label: selection
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| document.label.clone()),
                 items: vec![document.id.clone()],
                 principal_item: Some(document.id.clone()),
                 applications: selection.applications.clone(),

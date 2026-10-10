@@ -1,0 +1,174 @@
+version = 1
+id = "screensaver"
+label = "Screensaver"
+default_width = 2008
+show_in_default_profile = false
+logic_config = "screensaver"
+
+[layout]
+kind = "button"
+widget_id = 1
+label = "Wake the Touch Bar"
+plain = true
+padding = 0
+on_activate = "wake"
+
+[[layout.children]]
+kind = "stack"
+
+[[layout.children.children]]
+kind = "canvas"
+label = "Ground"
+canvas_from = "ground"
+
+[[layout.children.children]]
+kind = "stack"
+visible_from = "resting"
+
+[[layout.children.children.children]]
+kind = "stack"
+id = "rest-field"
+
+[[layout.children.children.children.children]]
+kind = "shader-effect"
+label = "FIELD"
+
+[layout.children.children.children.children.effect]
+id = 1
+source = "\nlet grid_uv = (uv * size - params0.yz) / vec2<f32>(max(params0.x, 0.75));\nlet cell = floor(grid_uv);\nlet inside = fract(grid_uv);\nlet tile = step(inside.x, 0.80) * step(inside.y, 0.80);\nlet hash = fract(sin(dot(cell, vec2<f32>(12.9898, 78.233))) * 43758.5453);\nlet phase = time * 0.104719755;\nlet energy = hash * 0.48 + (0.5 + 0.5 * sin(cell.x * 0.071 + cell.y * 0.73 + phase * 3.0)) * 0.30 + (0.5 + 0.5 * sin(cell.x * 0.037 - cell.y * 0.41 - phase * 2.0)) * 0.22;\nlet safe_background = vec4<f32>(params0.w, params1.x, params1.y, background.a);\nlet safe_accent = mix(accent, vec4<f32>(1.0, 1.0, 1.0, accent.a), params1.z);\nlet dim_color = mix(safe_background, safe_accent, 0.23);\nlet mid_color = mix(safe_background, safe_accent, 0.55);\nlet tier = mix(dim_color, mid_color, step(0.84, energy));\nlet color = vec4<f32>(tier.rgb, tile * step(0.68, energy));\n"
+parameters = ["cell", "left", "top", "background_r", "background_g", "background_b", "accent_lift", "foreground_lift"]
+period_ms = 60000
+
+[[layout.children.children.children.children]]
+kind = "shader-effect"
+label = "LIGHT"
+
+[layout.children.children.children.children.effect]
+id = 2
+source = "\nlet grid_uv = (uv * size - params0.yz) / vec2<f32>(max(params0.x, 0.75));\nlet cell = floor(grid_uv);\nlet inside = fract(grid_uv);\nlet tile = step(inside.x, 0.80) * step(inside.y, 0.80);\nlet hash = fract(sin(dot(cell, vec2<f32>(39.3468, 11.135))) * 24634.6345);\nlet phase = time * 0.104719755;\nlet delta = vec2<f32>((uv.x - (fract(time * 0.016666667 + 0.5) * 1.32 - 0.16)) * size.x / 118.0, (uv.y - (0.5 + 0.17 * sin(phase * 2.0))) * 3.4);\nlet energy = exp(-dot(delta, delta));\nlet visible = tile * step(0.14 + hash * 0.66, energy);\nlet safe_accent = mix(accent, vec4<f32>(1.0, 1.0, 1.0, accent.a), params1.z);\nlet safe_foreground = mix(foreground, vec4<f32>(1.0, 1.0, 1.0, foreground.a), params1.w);\nlet tier = mix(safe_accent, mix(safe_accent, safe_foreground, 0.70), step(0.76, energy));\nlet color = vec4<f32>(tier.rgb, visible * (0.42 + energy * 0.58));\n"
+parameters = ["cell", "left", "top", "background_r", "background_g", "background_b", "accent_lift", "foreground_lift"]
+period_ms = 60000
+
+[[layout.children.children.children.children]]
+kind = "shader-effect"
+label = "RIPPLE"
+
+[layout.children.children.children.children.effect]
+id = 3
+source = "\nlet grid_uv = (uv * size - params0.yz) / vec2<f32>(max(params0.x, 0.75));\nlet cell = floor(grid_uv);\nlet inside = fract(grid_uv);\nlet tile = step(inside.x, 0.80) * step(inside.y, 0.80);\nlet hash = fract(sin(dot(cell, vec2<f32>(19.19, 73.73))) * 19341.731);\nlet phase = fract(time * 0.066666667);\nlet distance = length(vec2<f32>((uv.x * size.x - size.x * 0.5) * 0.70, (uv.y * size.y - size.y * 0.5) * 4.0));\nlet energy = (1.0 - smoothstep(0.0, 24.0, abs(distance - phase * size.x * 0.42))) * (1.0 - phase);\nlet visible = tile * step(0.24 + hash * 0.52, energy);\nlet safe_background = vec4<f32>(params0.w, params1.x, params1.y, background.a);\nlet safe_accent = mix(accent, vec4<f32>(1.0, 1.0, 1.0, accent.a), params1.z);\nlet tier = mix(mix(safe_background, safe_accent, 0.55), safe_accent, step(0.68, energy));\nlet color = vec4<f32>(tier.rgb, visible * 0.72);\n"
+parameters = ["cell", "left", "top", "background_r", "background_g", "background_b", "accent_lift", "foreground_lift"]
+period_ms = 60000
+
+[[layout.children.children.children]]
+kind = "canvas"
+label = "Pixelated Omarchy wordmark"
+canvas_from = "mark"
+
+[layout.children.children.children.motion]
+id = 1
+duration_ms = 60000
+easing = "linear"
+playback = "alternate"
+
+[layout.children.children.children.motion.from]
+x = "negative_drift"
+
+[layout.children.children.children.motion.to]
+x = "drift"
+
+[[layout.children.children]]
+kind = "stack"
+visible_from = "waking_animated"
+
+[[layout.children.children.children]]
+kind = "stack"
+id = "wake-field"
+
+[[layout.children.children.children.children]]
+kind = "shader-effect"
+label = "FIELD"
+
+[layout.children.children.children.children.effect]
+id = 1
+source = "\nlet grid_uv = (uv * size - params0.yz) / vec2<f32>(max(params0.x, 0.75));\nlet cell = floor(grid_uv);\nlet inside = fract(grid_uv);\nlet tile = step(inside.x, 0.80) * step(inside.y, 0.80);\nlet hash = fract(sin(dot(cell, vec2<f32>(12.9898, 78.233))) * 43758.5453);\nlet phase = time * 0.104719755;\nlet energy = hash * 0.48 + (0.5 + 0.5 * sin(cell.x * 0.071 + cell.y * 0.73 + phase * 3.0)) * 0.30 + (0.5 + 0.5 * sin(cell.x * 0.037 - cell.y * 0.41 - phase * 2.0)) * 0.22;\nlet safe_background = vec4<f32>(params0.w, params1.x, params1.y, background.a);\nlet safe_accent = mix(accent, vec4<f32>(1.0, 1.0, 1.0, accent.a), params1.z);\nlet dim_color = mix(safe_background, safe_accent, 0.23);\nlet mid_color = mix(safe_background, safe_accent, 0.55);\nlet tier = mix(dim_color, mid_color, step(0.84, energy));\nlet color = vec4<f32>(tier.rgb, tile * step(0.68, energy));\n"
+parameters = ["cell", "left", "top", "background_r", "background_g", "background_b", "accent_lift", "foreground_lift"]
+period_ms = 60000
+
+[[layout.children.children.children.children]]
+kind = "shader-effect"
+label = "LIGHT"
+
+[layout.children.children.children.children.effect]
+id = 2
+source = "\nlet grid_uv = (uv * size - params0.yz) / vec2<f32>(max(params0.x, 0.75));\nlet cell = floor(grid_uv);\nlet inside = fract(grid_uv);\nlet tile = step(inside.x, 0.80) * step(inside.y, 0.80);\nlet hash = fract(sin(dot(cell, vec2<f32>(39.3468, 11.135))) * 24634.6345);\nlet phase = time * 0.104719755;\nlet delta = vec2<f32>((uv.x - (fract(time * 0.016666667 + 0.5) * 1.32 - 0.16)) * size.x / 118.0, (uv.y - (0.5 + 0.17 * sin(phase * 2.0))) * 3.4);\nlet energy = exp(-dot(delta, delta));\nlet visible = tile * step(0.14 + hash * 0.66, energy);\nlet safe_accent = mix(accent, vec4<f32>(1.0, 1.0, 1.0, accent.a), params1.z);\nlet safe_foreground = mix(foreground, vec4<f32>(1.0, 1.0, 1.0, foreground.a), params1.w);\nlet tier = mix(safe_accent, mix(safe_accent, safe_foreground, 0.70), step(0.76, energy));\nlet color = vec4<f32>(tier.rgb, visible * (0.42 + energy * 0.58));\n"
+parameters = ["cell", "left", "top", "background_r", "background_g", "background_b", "accent_lift", "foreground_lift"]
+period_ms = 60000
+
+[[layout.children.children.children.children]]
+kind = "shader-effect"
+label = "RIPPLE"
+
+[layout.children.children.children.children.effect]
+id = 3
+source = "\nlet grid_uv = (uv * size - params0.yz) / vec2<f32>(max(params0.x, 0.75));\nlet cell = floor(grid_uv);\nlet inside = fract(grid_uv);\nlet tile = step(inside.x, 0.80) * step(inside.y, 0.80);\nlet hash = fract(sin(dot(cell, vec2<f32>(19.19, 73.73))) * 19341.731);\nlet phase = fract(time * 0.066666667);\nlet distance = length(vec2<f32>((uv.x * size.x - size.x * 0.5) * 0.70, (uv.y * size.y - size.y * 0.5) * 4.0));\nlet energy = (1.0 - smoothstep(0.0, 24.0, abs(distance - phase * size.x * 0.42))) * (1.0 - phase);\nlet visible = tile * step(0.24 + hash * 0.52, energy);\nlet safe_background = vec4<f32>(params0.w, params1.x, params1.y, background.a);\nlet safe_accent = mix(accent, vec4<f32>(1.0, 1.0, 1.0, accent.a), params1.z);\nlet tier = mix(mix(safe_background, safe_accent, 0.55), safe_accent, step(0.68, energy));\nlet color = vec4<f32>(tier.rgb, visible * 0.72);\n"
+parameters = ["cell", "left", "top", "background_r", "background_g", "background_b", "accent_lift", "foreground_lift"]
+period_ms = 60000
+
+[layout.children.children.children.motion]
+id = 3
+duration_ms = 420
+easing = "ease-in-out"
+playback = "once"
+
+[layout.children.children.children.motion.from]
+opacity = 1
+
+[layout.children.children.children.motion.to]
+opacity = 0
+
+[[layout.children.children.children]]
+kind = "canvas"
+label = "Pixelated Omarchy wordmark"
+canvas_from = "mark"
+
+[layout.children.children.children.motion]
+id = 4
+duration_ms = 300
+easing = "ease-in-out"
+playback = "once"
+
+[layout.children.children.children.motion.from]
+
+
+[layout.children.children.children.motion.to]
+y = -8
+scale = 1.06
+opacity = 0
+
+[[layout.children.children.children]]
+kind = "canvas"
+label = "Handback rule"
+canvas_from = "hairline"
+
+[layout.children.children.children.motion]
+id = 5
+duration_ms = 520
+easing = "ease-in-out"
+playback = "once"
+
+[layout.children.children.children.motion.from]
+opacity = 0
+
+[layout.children.children.children.motion.to]
+opacity = 1
+
+[[layout.children.children]]
+kind = "canvas"
+label = "Handback rule"
+canvas_from = "hairline"
+visible_from = "waking_reduced"
+
+[selection]
+label = "Omarchy Screensaver"
+applications = ["org.omarchy.screensaver"]
+activities = ["omarchy-image-selector", "theme-change"]

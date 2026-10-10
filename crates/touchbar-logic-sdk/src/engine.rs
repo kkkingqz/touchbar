@@ -108,3 +108,39 @@ impl PowerEngine {
 pub fn submit(operation: ControlOperation) -> Result<RequestId, CommandSubmitError> {
     command_run(&operation.request()?)
 }
+
+/// Scoped process operations. Command IDs and bounded values come from logic.
+pub struct CommandEngine;
+/// Framed operations on a declared, user-bound local service.
+pub struct LocalEngine;
+impl EngineApi {
+    pub const fn commands(self) -> CommandEngine {
+        CommandEngine
+    }
+    pub const fn local(self) -> LocalEngine {
+        LocalEngine
+    }
+}
+impl CommandEngine {
+    pub fn run(
+        &self,
+        request: &touchbar_component_sdk::CommandRunRequest,
+    ) -> Result<RequestId, CommandSubmitError> {
+        command_run(request)
+    }
+}
+impl LocalEngine {
+    pub fn connect(
+        &self,
+        request: &touchbar_component_sdk::LocalConnect,
+    ) -> Result<RequestId, touchbar_component_sdk::LocalSubmitError> {
+        touchbar_component_sdk::local_connect(request)
+    }
+    pub fn send(
+        &self,
+        resource: touchbar_component_sdk::ResourceId,
+        bytes: &[u8],
+    ) -> Result<RequestId, touchbar_component_sdk::LocalSubmitError> {
+        touchbar_component_sdk::local_send(resource, bytes)
+    }
+}

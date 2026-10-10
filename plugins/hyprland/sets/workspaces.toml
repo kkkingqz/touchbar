@@ -1,0 +1,75 @@
+version = 1
+id = "workspaces"
+label = "Workspaces"
+default_width = 160
+show_in_default_profile = true
+logic_config = "workspaces"
+expanded_panel = "workspace-actions"
+
+[layout]
+kind = "row"
+spacing = 5
+padding = 3
+
+[[layout.children]]
+kind = "button"
+widget_id = 11
+label = "Current workspace"
+on_activate = "button-11"
+minimum = 44
+width = 64
+maximum = 1000
+grow = 0
+background = "accent"
+
+[[layout.children.children]]
+kind = "text"
+text_from = "workspace_label"
+color = "on-accent"
+font_size = 12
+
+[[layout.children]]
+kind = "slider"
+widget_id = 10
+label = "Workspace 1 through 10"
+value_from = "workspace_value"
+on_value_changed = "button-10"
+enabled_from = "command_available"
+minimum = 60
+width = 180
+maximum = 900
+grow = 1
+visible_from = "wide"
+
+[[panels]]
+id = "workspace-actions"
+minimum_width = 428
+preferred_width = 840
+maximum_width = 1004
+dismiss_on_selection = true
+principal_item = "workspaces"
+
+[[panels.element]]
+kind = "item"
+item = "workspaces"
+minimum_width = 180
+preferred_width = 360
+maximum_width = 520
+
+[[panels.element]]
+kind = "fixed-space"
+width = 8
+
+[[panels.element]]
+kind = "item"
+item = "window-actions"
+minimum_width = 120
+preferred_width = 220
+maximum_width = 280
+
+[[panels.element]]
+kind = "item"
+item = "move-window"
+minimum_width = 120
+preferred_width = 240
+maximum_width = 320

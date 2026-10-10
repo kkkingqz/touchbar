@@ -1,0 +1,21 @@
+version = 1
+id = "recording"
+label = "Recording"
+default_width = 160
+show_in_default_profile = true
+logic_config = "recording"
+
+[layout]
+kind = "button"
+widget_id = 10
+label_from = "recording_label"
+on_activate = "button-10"
+enabled_from = "local_available"
+background_from = "recording_background"
+pressed_background_from = "recording_pressed"
+
+[[layout.children]]
+kind = "text"
+text_from = "recording_text"
+color_from = "recording_color"
+font_size = 11

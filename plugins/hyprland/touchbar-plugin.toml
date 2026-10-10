@@ -9,53 +9,21 @@ source = "github:cameroncooper/touchbar-hyprland"
 api = "^1.0"
 
 [runtime]
-kind = "component"
+kind = "button-set-logic"
 entrypoint = "component/plugin.wasm"
-world = "touchbar:plugin/plugin@1.0.0"
+world = "touchbar:plugin/button-set-logic@1.0.0"
 
-[[items]]
+[[sets]]
 id = "workspaces"
-label = "Workspaces"
-expanded_bar = "workspace-actions"
-[[items]]
+file = "sets/workspaces.toml"
+
+[[sets]]
 id = "window-actions"
-label = "Window Actions"
-[[items]]
+file = "sets/window-actions.toml"
+
+[[sets]]
 id = "move-window"
-label = "Move Window"
-
-[[bar]]
-id = "workspace-actions"
-minimum_width = 428
-preferred_width = 840
-maximum_width = 1004
-dismiss_on_selection = true
-principal_item = "workspaces"
-
-[[bar.element]]
-kind = "item"
-item = "workspaces"
-minimum_width = 180
-preferred_width = 360
-maximum_width = 520
-
-[[bar.element]]
-kind = "fixed-space"
-width = 8
-
-[[bar.element]]
-kind = "item"
-item = "window-actions"
-minimum_width = 120
-preferred_width = 220
-maximum_width = 280
-
-[[bar.element]]
-kind = "item"
-item = "move-window"
-minimum_width = 120
-preferred_width = 240
-maximum_width = 320
+file = "sets/move-window.toml"
 
 [[permission]]
 capability = "context.read.v1"

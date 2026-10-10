@@ -303,7 +303,7 @@ impl Builder<'_> {
             .string(&node.label, &node.label_from, record)?
             .unwrap_or_default();
         let label = self.text(label)?;
-        let color = node.color.map(color_role).unwrap_or(ColorRole::Foreground);
+        let color = self.role(node.color, &node.color_from, ColorRole::Foreground, record)?;
         let id = if record.is_none() {
             node.widget_id
         } else {
@@ -396,16 +396,18 @@ impl Builder<'_> {
                             .map(|_| self.boolean(&node.selected_from, false, record))
                             .transpose()?,
                         style: PressableStyle {
-                            background: (!node.plain).then_some(
-                                node.background
-                                    .map(color_role)
-                                    .unwrap_or(ColorRole::Control),
-                            ),
-                            pressed_background: (!node.plain).then_some(
-                                node.pressed_background
-                                    .map(color_role)
-                                    .unwrap_or(ColorRole::ControlPressed),
-                            ),
+                            background: (!node.plain).then_some(self.role(
+                                node.background,
+                                &node.background_from,
+                                ColorRole::Control,
+                                record,
+                            )?),
+                            pressed_background: (!node.plain).then_some(self.role(
+                                node.pressed_background,
+                                &node.pressed_background_from,
+                                ColorRole::ControlPressed,
+                                record,
+                            )?),
                             corner_radius: node.corner_radius,
                             padding: node.padding,
                             ..PressableStyle::control()
@@ -584,6 +586,22 @@ impl Builder<'_> {
             opacity: self.scalar(value.opacity.as_ref(), 1.0, 0.0, 1.0, record)?,
         })
     }
+    fn role(
+        &self,
+        fixed: Option<ConfigRole>,
+        binding: &Option<String>,
+        default: ColorRole,
+        record: Option<Record<'_>>,
+    ) -> Result<ColorRole> {
+        let fixed = fixed.map(color_role).unwrap_or(default);
+        let Some(name) = self.string(&None, binding, record)? else {
+            return Ok(fixed);
+        };
+        Ok(color_role(serde_json::from_value(
+            serde_json::Value::String(name),
+        )?))
+    }
+
     fn canvas(&mut self, node: &LayoutNode, label: &str, color: ColorRole) -> Result<Node> {
         let source = node
             .canvas_from
@@ -622,7 +640,22 @@ impl Builder<'_> {
             } else {
                 color
             };
-            let paint = CanvasPaint::role(role).with_opacity(number("opacity", 1.0, 0.0, 1.0)?);
+            let rgba_fields = ["r", "g", "b", "a"];
+            let rgba_count = rgba_fields
+                .iter()
+                .filter(|field| record.0.contains_key(**field))
+                .count();
+            let paint = match rgba_count {
+                0 => CanvasPaint::role(role),
+                4 => CanvasPaint::rgba(touchbar_ui::Color::rgba(
+                    number("r", 0.0, 0.0, 1.0)?,
+                    number("g", 0.0, 0.0, 1.0)?,
+                    number("b", 0.0, 0.0, 1.0)?,
+                    number("a", 1.0, 0.0, 1.0)?,
+                )),
+                _ => bail!("canvas RGBA requires all four channels"),
+            }
+            .with_opacity(number("opacity", 1.0, 0.0, 1.0)?);
             let x = number("x", 0.0, -8192.0, 8192.0)?;
             let y = number("y", 0.0, -8192.0, 8192.0)?;
             let rect = Rect::new(
@@ -748,7 +781,15 @@ impl Builder<'_> {
 
 fn flex(node: &LayoutNode) -> Flex {
     if let Some(width) = node.width {
-        return Flex::fixed(width);
+        if node.minimum.is_none() && node.maximum.is_none() && node.grow.is_none() {
+            return Flex::fixed(width);
+        }
+        return Flex::flexible(
+            node.minimum.unwrap_or(0.0),
+            width,
+            node.maximum.unwrap_or(8192.0),
+        )
+        .grow(node.grow.unwrap_or(1.0));
     }
     if node.kind == LayoutKind::FixedSpace {
         return Flex::fixed(node.minimum.unwrap_or(0.0));

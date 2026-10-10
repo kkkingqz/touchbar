@@ -1,0 +1,47 @@
+version = 1
+id = "session"
+label = "Session Actions"
+default_width = 160
+show_in_default_profile = true
+logic_config = "session"
+
+[layout]
+kind = "row"
+spacing = 4
+padding = 2
+
+[[layout.children]]
+kind = "button"
+widget_id = 20
+label = "Hold to lock"
+minimum = 60
+width = 100
+maximum = 500
+grow = 1
+background = "destructive"
+pressed_background = "destructive"
+hold_ms = 800
+enabled_from = "command_available"
+on_long_pressed = "button-20"
+
+[[layout.children.children]]
+kind = "text"
+text = "HOLD LOCK"
+font_size = 10
+color = "on-destructive"
+
+[[layout.children]]
+kind = "button"
+widget_id = 21
+label = "IDLE"
+on_activate = "button-21"
+minimum = 44
+width = 80
+maximum = 400
+grow = 1
+enabled_from = "local_available"
+
+[[layout.children.children]]
+kind = "text"
+text = "IDLE"
+font_size = 11

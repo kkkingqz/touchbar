@@ -228,11 +228,11 @@ flatpak-spawn --host /usr/bin/bash -c \
 
 **Interfaces:** Тот же world; common action/command adapters выносить в библиотечные модули при фактическом повторении. Layout files соответствуют каждому существующему primary item; panel helpers остаются в том же экземпляре логики.
 
-- [ ] Зафиксировать regression fixtures всех нынешних widget IDs/actions, widths, panels и optional grants. Написать `first_party_layouts_have_no_commands`, `omarchy_provider_is_unchanged`, `command_completion_updates_only_own_set`, `panel_close_cancels_pending_contact`. Assert каждый ID из прежнего manifest доступен, providers/scopes сохраняются.
-- [ ] Выполнить новые и существующие replay tests до миграции; новые отдельные описания отсутствуют.
-- [ ] Перенести layouts и action bindings, сохранив command IDs/DBus scopes и запреты запуска без разрешений. Omarchy кнопки используют новый runtime; отдельный appearance provider остаётся прежним world и entrypoint.
-- [ ] Build/check/replay каждого из четырёх пакетов, выполнить применимые presentation/effect/asset tests.
-- [ ] Коммит: `refactor: migrate remaining first party button sets`.
+- [x] Зафиксировать regression fixtures всех нынешних widget IDs/actions, widths, panels и optional grants. Написать `first_party_layouts_have_no_commands`, `omarchy_provider_is_unchanged`, `command_completion_updates_only_own_set`, `panel_close_cancels_pending_contact`. Assert каждый ID из прежнего manifest доступен, providers/scopes сохраняются.
+- [x] Выполнить новые и существующие replay tests до миграции; новые отдельные описания отсутствуют.
+- [x] Перенести layouts и action bindings, сохранив command IDs/DBus scopes и запреты запуска без разрешений. Omarchy кнопки используют новый runtime; отдельный appearance provider остаётся прежним world и entrypoint.
+- [x] Build/check/replay каждого из четырёх пакетов, выполнить применимые presentation/effect/asset tests.
+- [x] Коммит: `refactor: migrate remaining first party button sets`.
 
 ### Task 12: Документация, build tooling и полный regression
 

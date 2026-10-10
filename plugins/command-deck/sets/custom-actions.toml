@@ -1,0 +1,75 @@
+version = 1
+id = "custom-actions"
+label = "Custom Actions"
+default_width = 160
+show_in_default_profile = true
+logic_config = "custom-actions"
+
+[layout]
+kind = "row"
+spacing = 4
+padding = 2
+
+[[layout.children]]
+kind = "button"
+widget_id = 100
+label = "1"
+on_activate = "button-100"
+minimum = 40
+width = 80
+maximum = 300
+grow = 1
+enabled_from = "local_available"
+
+[[layout.children.children]]
+kind = "text"
+text_from = "response_label"
+font_size = 11
+
+[[layout.children]]
+kind = "button"
+widget_id = 101
+label = "2"
+on_activate = "button-101"
+minimum = 40
+width = 80
+maximum = 300
+grow = 1
+enabled_from = "local_available"
+
+[[layout.children.children]]
+kind = "text"
+text = "2"
+font_size = 11
+
+[[layout.children]]
+kind = "button"
+widget_id = 102
+label = "3"
+on_activate = "button-102"
+minimum = 40
+width = 80
+maximum = 300
+grow = 1
+enabled_from = "local_available"
+
+[[layout.children.children]]
+kind = "text"
+text = "3"
+font_size = 11
+
+[[layout.children]]
+kind = "button"
+widget_id = 103
+label = "4"
+on_activate = "button-103"
+minimum = 40
+width = 80
+maximum = 300
+grow = 1
+enabled_from = "local_available"
+
+[[layout.children.children]]
+kind = "text"
+text = "4"
+font_size = 11

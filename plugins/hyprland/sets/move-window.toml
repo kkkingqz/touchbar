@@ -1,0 +1,41 @@
+version = 1
+id = "move-window"
+label = "Move Window"
+default_width = 160
+show_in_default_profile = true
+logic_config = "move-window"
+
+[layout]
+kind = "row"
+spacing = 5
+padding = 3
+
+[[layout.children]]
+kind = "button"
+widget_id = 31
+label = "Move focused window"
+on_activate = "button-31"
+minimum = 64
+width = 100
+maximum = 300
+grow = 0
+background = "accent"
+enabled_from = "command_available"
+
+[[layout.children.children]]
+kind = "text"
+text_from = "destination_label"
+color = "on-accent"
+font_size = 11
+
+[[layout.children]]
+kind = "slider"
+widget_id = 30
+label = "Destination workspace"
+value_from = "destination_value"
+on_value_changed = "button-30"
+enabled_from = "command_available"
+minimum = 50
+width = 140
+maximum = 800
+grow = 1

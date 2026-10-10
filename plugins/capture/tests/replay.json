@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "item": "recording",
+  "width": 160,
+  "steps": [
+    {
+      "kind": "snapshot",
+      "name": "optional-grant-unavailable"
+    },
+    {
+      "kind": "touch",
+      "contact_id": 1,
+      "phase": "down",
+      "x": 20,
+      "y": 30,
+      "time_ms": 10
+    },
+    {
+      "kind": "touch",
+      "contact_id": 1,
+      "phase": "up",
+      "x": 20,
+      "y": 30,
+      "time_ms": 30
+    },
+    {
+      "kind": "snapshot",
+      "name": "unavailable-action-does-not-run"
+    }
+  ]
+}

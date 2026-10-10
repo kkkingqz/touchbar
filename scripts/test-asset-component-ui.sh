@@ -64,6 +64,9 @@ arguments = ["--version", manifest["plugin"]["version"]]
 for asset in manifest.get("asset", []):
     digest = hashlib.sha256((root / asset["path"]).read_bytes()).hexdigest()
     arguments.extend(["--asset-digest", f"{asset['id']}=sha256:{digest}"])
+for reference in manifest.get("sets", []):
+    digest = hashlib.sha256((root / reference["file"]).read_bytes()).hexdigest()
+    arguments.extend(["--set-digest", f"{reference['file']}=sha256:{digest}"])
 sys.stdout.buffer.write(b"\0".join(argument.encode() for argument in arguments) + b"\0")
 PY
 mapfile -d '' -t package_arguments <"$runtime_dir/package-arguments"

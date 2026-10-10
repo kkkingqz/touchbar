@@ -44,6 +44,7 @@ fn default_true() -> bool {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Selection {
+    pub label: Option<String>,
     #[serde(default)]
     pub applications: Vec<String>,
     #[serde(default)]
@@ -143,10 +144,13 @@ pub struct LayoutNode {
     pub asset: Option<String>,
     pub asset_from: Option<String>,
     pub color: Option<ColorRole>,
+    pub color_from: Option<String>,
     pub background: Option<ColorRole>,
+    pub background_from: Option<String>,
     #[serde(default)]
     pub plain: bool,
     pub pressed_background: Option<ColorRole>,
+    pub pressed_background_from: Option<String>,
     pub corner_radius: Option<f32>,
     pub font_size: Option<f32>,
     pub value: Option<f64>,
@@ -225,7 +229,25 @@ impl SetDocument {
         if source.len() > MAX_CONFIG_BYTES {
             bail!("set file exceeds 256 KiB");
         }
-        let set: Self = toml::from_str(source)?;
+        let value: toml::Value = toml::from_str(source)?;
+        // Reject values JSON would normalize (notably NaN -> null), and bound
+        // structure before the compact typed deserializer walks recursive nodes.
+        let mut pending = vec![(&value, 0usize)];
+        while let Some((value, depth)) = pending.pop() {
+            if depth > MAX_TREE_DEPTH * 4 + 8 {
+                bail!("set structure too deep");
+            }
+            match value {
+                toml::Value::Float(number) if !number.is_finite() => bail!("non-finite set value"),
+                toml::Value::Datetime(_) => bail!("set dates must be quoted text"),
+                toml::Value::Array(values) => pending.extend(values.iter().map(|v| (v, depth + 1))),
+                toml::Value::Table(values) => {
+                    pending.extend(values.values().map(|v| (v, depth + 1)))
+                }
+                _ => {}
+            }
+        }
+        let set: Self = serde_json::from_value(serde_json::to_value(value)?)?;
         set.validate()?;
         Ok(set)
     }
@@ -248,6 +270,13 @@ impl SetDocument {
             bail!("too many panels");
         }
         if let Some(selection) = &self.selection {
+            if selection.label.as_ref().is_some_and(|label| {
+                label.trim().is_empty()
+                    || label.len() > MAX_TEXT_BYTES
+                    || label.chars().any(char::is_control)
+            }) {
+                bail!("invalid selection label");
+            }
             if selection.applications.is_empty() && selection.activities.is_empty() {
                 bail!("selection must declare application or activity context");
             }
@@ -597,6 +626,9 @@ fn validate_node_bindings(
         (&node.text_from, ScalarType::Text),
         (&node.symbol_from, ScalarType::Text),
         (&node.asset_from, ScalarType::Text),
+        (&node.pressed_background_from, ScalarType::Text),
+        (&node.background_from, ScalarType::Text),
+        (&node.color_from, ScalarType::Text),
         (&node.value_from, ScalarType::Number),
     ] {
         if let Some(path) = binding
