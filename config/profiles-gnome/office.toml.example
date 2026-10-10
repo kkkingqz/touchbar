@@ -1,0 +1,50 @@
+version = 1
+
+[[contribution]]
+id = "formatting"
+items = [
+  { plugin = "github:cameroncooper/touchbar-app-actions", item = "formatting", required = false },
+]
+
+[[profile]]
+id = "office"
+
+[[profile.element]]
+kind = "slot"
+id = "formatting"
+policy = "fixed"
+contributions = ["formatting"]
+
+[[profile.element]]
+kind = "flexible-space"
+minimum = 16
+weight = 1
+
+[[profile.element]]
+kind = "group"
+id = "levels"
+layout = "equal-width"
+spacing = 8
+
+[[profile.element.element]]
+kind = "slot"
+id = "volume"
+policy = "fixed"
+contributions = ["volume"]
+
+[[profile.element.element]]
+kind = "slot"
+id = "brightness"
+policy = "fixed"
+contributions = ["brightness"]
+
+# Players, whenever they own the session.
+
+[[rule]]
+profile = "office"
+priority = 50
+when = { kind = "any", predicates = [
+  { kind = "text-equals", key = "application.id", value = "libreoffice-writer" },
+  { kind = "text-equals", key = "application.id", value = "libreoffice-calc" },
+  { kind = "text-equals", key = "application.id", value = "libreoffice-impress" },
+] }

@@ -1,0 +1,28 @@
+version = 1
+
+[[contribution]]
+id = "volume"
+items = [
+  { plugin = "github:cameroncooper/touchbar-controls", item = "volume", required = false },
+]
+
+[[contribution]]
+id = "brightness"
+items = [
+  { plugin = "github:cameroncooper/touchbar-controls", item = "brightness", required = false },
+]
+
+# No visible item, so touchbard's system row shows.
+
+[[profile]]
+id = "system"
+
+[[profile.element]]
+kind = "flexible-space"
+minimum = 0
+weight = 1
+
+# macOS's Now Playing layout: previous, play/pause and next, then the title
+# and artist over a scrubber with elapsed and remaining time. The volume and
+# display brightness sliders on the right stand in for the Control Strip;
+# they set absolute levels and show a default position until first touched.

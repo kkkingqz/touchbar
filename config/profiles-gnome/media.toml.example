@@ -1,0 +1,91 @@
+version = 1
+
+[[contribution]]
+id = "transport"
+items = [
+  { plugin = "github:cameroncooper/touchbar-media", item = "transport", required = false },
+]
+
+[[contribution]]
+id = "timeline"
+items = [
+  { plugin = "github:cameroncooper/touchbar-media", item = "timeline", required = false },
+]
+
+[[profile]]
+id = "media"
+
+[[profile.element]]
+kind = "slot"
+id = "transport"
+policy = "fixed"
+contributions = ["transport"]
+
+[[profile.element]]
+kind = "fixed-space"
+width = 12
+
+[[profile.element]]
+kind = "slot"
+id = "timeline"
+policy = "fixed"
+contributions = ["timeline"]
+
+[[profile.element]]
+kind = "flexible-space"
+minimum = 16
+weight = 1
+
+[[profile.element]]
+kind = "group"
+id = "levels"
+layout = "equal-width"
+spacing = 8
+
+[[profile.element.element]]
+kind = "slot"
+id = "volume"
+policy = "fixed"
+contributions = ["volume"]
+
+[[profile.element.element]]
+kind = "slot"
+id = "brightness"
+policy = "fixed"
+contributions = ["brightness"]
+
+# Safari's layout: navigation on the left; the volume and display brightness
+# sliders on the right stand in for the Control Strip, as in media.
+
+[[rule]]
+profile = "media"
+priority = 100
+when = { kind = "any", predicates = [
+  { kind = "all", predicates = [
+    { kind = "text-equals", key = "application.id", value = "vlc" },
+    { kind = "text-equals", key = "media.player", value = "vlc" },
+  ] },
+  # Rhythmbox's class may be its GTK application ID or its executable name;
+  # both are listed.
+  { kind = "all", predicates = [
+    { kind = "any", predicates = [
+      { kind = "text-equals", key = "application.id", value = "org.gnome.rhythmbox3" },
+      { kind = "text-equals", key = "application.id", value = "rhythmbox" },
+    ] },
+    { kind = "text-equals", key = "media.player", value = "rhythmbox" },
+  ] },
+] }
+
+# Firefox (snap), while its own media plays and for a minute after a pause.
+
+[[rule]]
+profile = "media"
+priority = 90
+when = { kind = "all", predicates = [
+  { kind = "text-equals", key = "application.id", value = "firefox_firefox" },
+  { kind = "text-equals", key = "media.player", value = "firefox" },
+  { kind = "boolean-equals", key = "media.active", value = true },
+] }
+
+# Firefox without active media. Below the media rule, which takes over while
+# a video or song plays in it.

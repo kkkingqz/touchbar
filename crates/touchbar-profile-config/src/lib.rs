@@ -2,10 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env, fs,
-    io::Read,
-    os::unix::fs::OpenOptionsExt,
-    os::unix::fs::{MetadataExt, PermissionsExt},
+    env,
     path::{Path, PathBuf},
 };
 
@@ -18,6 +15,9 @@ use touchbar_model::{
     ProfileDefinition, ProfileElement, ProfileGroup, ProfileGroupElement, ProfileRule,
     ProfileSelector, Registry, SlotDefinition, SlotPolicy,
 };
+
+mod includes;
+pub use includes::{LoadedProfiles, load_with_sources, requested_sources};
 
 pub const PROFILE_CONFIG_VERSION: u32 = 1;
 pub const PROFILE_CONFIG_FILE: &str = "profiles.toml";
@@ -43,6 +43,8 @@ const MAX_VALUE_BYTES: usize = 256;
 pub struct ProfileDocument {
     pub version: u32,
     pub fallback: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
     #[serde(default, rename = "contribution")]
     pub contributions: Vec<ContributionConfig>,
     #[serde(default, rename = "profile")]
@@ -681,30 +683,7 @@ pub fn discover_path() -> Result<PathBuf> {
 }
 
 pub fn load(path: &Path) -> Result<ProfileDocument> {
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
-        .open(path)
-        .with_context(|| format!("open profile configuration {}", path.display()))?;
-    let metadata = file
-        .metadata()
-        .with_context(|| format!("inspect profile configuration {}", path.display()))?;
-    if !metadata.is_file()
-        || metadata.nlink() != 1
-        || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.permissions().mode() & 0o022 != 0
-        || metadata.len() > MAX_CONFIG_BYTES
-    {
-        bail!(
-            "profile configuration {} must be one owner-writable regular file owned by the current user and at most {MAX_CONFIG_BYTES} bytes",
-            path.display()
-        );
-    }
-    let mut source = String::new();
-    file.take(MAX_CONFIG_BYTES + 1)
-        .read_to_string(&mut source)
-        .with_context(|| format!("read profile configuration {}", path.display()))?;
-    ProfileDocument::from_toml(&source)
+    Ok(load_with_sources(path)?.document)
 }
 
 fn validate_id(label: &str, value: &str) -> Result<()> {
@@ -918,6 +897,7 @@ fn validate_predicate(predicate: &PredicateConfig, depth: usize, nodes: &mut usi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{fs, os::unix::fs::PermissionsExt};
 
     const VALID: &str = r#"
 version = 1

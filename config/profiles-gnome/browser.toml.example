@@ -1,0 +1,48 @@
+version = 1
+
+[[contribution]]
+id = "browser"
+items = [
+  { plugin = "github:cameroncooper/touchbar-app-actions", item = "browser", required = false },
+]
+
+[[profile]]
+id = "browser"
+
+[[profile.element]]
+kind = "slot"
+id = "browser"
+policy = "fixed"
+contributions = ["browser"]
+
+[[profile.element]]
+kind = "flexible-space"
+minimum = 16
+weight = 1
+
+[[profile.element]]
+kind = "group"
+id = "levels"
+layout = "equal-width"
+spacing = 8
+
+[[profile.element.element]]
+kind = "slot"
+id = "volume"
+policy = "fixed"
+contributions = ["volume"]
+
+[[profile.element.element]]
+kind = "slot"
+id = "brightness"
+policy = "fixed"
+contributions = ["brightness"]
+
+# Pages' and Word's text formatting buttons, then the same Control Strip.
+
+[[rule]]
+profile = "browser"
+priority = 50
+when = { kind = "text-equals", key = "application.id", value = "firefox_firefox" }
+
+# LibreOffice Writer, Calc and Impress.

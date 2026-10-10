@@ -157,6 +157,68 @@ for _ in $(seq 1 500); do
     sleep 0.01
 done
 
+# A rejected graph must watch a newly requested file even before its directory exists.
+rejections_before=$(rg -c 'profile-watch=reload-rejected' "$runtime_dir/sessiond.log" || true)
+cat >"$runtime_dir/profiles.next" <<'PROFILES'
+version = 1
+fallback = "included"
+include = ["parts/new.toml"]
+PROFILES
+chmod 600 "$runtime_dir/profiles.next"
+mv "$runtime_dir/profiles.next" "$profile_file"
+for _ in $(seq 1 500); do
+    rejections_now=$(rg -c 'profile-watch=reload-rejected' "$runtime_dir/sessiond.log" || true)
+    ((rejections_now > rejections_before)) && break
+    sleep 0.01
+done
+((rejections_now > rejections_before))
+preserved=$(env TOUCHBAR_HOME="$store_dir" "$ctl" session status --format json)
+[[ "$preserved" == *'"active": "default"'* ]]
+rejections_before=$rejections_now
+mkdir "$runtime_dir/parts"
+for _ in $(seq 1 500); do
+    rejections_now=$(rg -c 'profile-watch=reload-rejected' "$runtime_dir/sessiond.log" || true)
+    ((rejections_now > rejections_before)) && break
+    sleep 0.01
+done
+((rejections_now > rejections_before))
+cat >"$runtime_dir/parts/new.toml" <<'FRAGMENT'
+version = 1
+[[profile]]
+id = "included"
+[[profile.element]]
+kind = "flexible-space"
+minimum = 0
+weight = 1
+FRAGMENT
+chmod 600 "$runtime_dir/parts/new.toml"
+for _ in $(seq 1 500); do
+    recovered=$(env TOUCHBAR_HOME="$store_dir" "$ctl" session status --format json)
+    [[ "$recovered" == *'"active": "included"'* ]] && break
+    sleep 0.01
+done
+[[ "$recovered" == *'"active": "included"'* ]]
+# Atomic replacement of the fragment is observed; invalid data preserves the catalog.
+rejections_before=$(rg -c 'profile-watch=reload-rejected' "$runtime_dir/sessiond.log" || true)
+sed 's/version = 1/version = 999/' "$runtime_dir/parts/new.toml" >"$runtime_dir/parts/new.next"
+chmod 600 "$runtime_dir/parts/new.next"
+mv "$runtime_dir/parts/new.next" "$runtime_dir/parts/new.toml"
+for _ in $(seq 1 500); do
+    rejections_now=$(rg -c 'profile-watch=reload-rejected' "$runtime_dir/sessiond.log" || true)
+    ((rejections_now > rejections_before)) && break
+    sleep 0.01
+done
+((rejections_now > rejections_before))
+preserved=$(env TOUCHBAR_HOME="$store_dir" "$ctl" session status --format json)
+[[ "$preserved" == *'"active": "included"'* ]]
+install -m 0600 "$project_dir/tests/fixtures/profiles-v1.toml" "$profile_file"
+for _ in $(seq 1 500); do
+    restored=$(env TOUCHBAR_HOME="$store_dir" "$ctl" session status --format json)
+    [[ "$restored" == *'"active": "default"'* ]] && break
+    sleep 0.01
+done
+[[ "$restored" == *'"active": "default"'* ]]
+
 placeholder_visible_before=$(rg -c '^plugin-placeholder=visible$' "$runtime_dir/sessiond.log" || true)
 kill "$beta_pid"
 wait "$beta_pid" 2>/dev/null || true
@@ -205,4 +267,4 @@ replacement_beta_pid=
 wait "$session_pid"
 session_pid=
 
-echo "profile-control=ok identities=qualified profiles=2 manual=ok automatic=ok reload=ok hot_reload=ok invalid_preserved=ok placeholder=host-owned reconnect=ok"
+echo "profile-control=ok identities=qualified profiles=2 manual=ok automatic=ok reload=ok hot_reload=ok invalid_preserved=ok missing_include=ok fragment_reload=ok placeholder=host-owned reconnect=ok"

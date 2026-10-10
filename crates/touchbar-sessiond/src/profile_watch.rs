@@ -1,6 +1,7 @@
 //! Event-driven watching for the user profile document.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs,
     os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
     path::{Path, PathBuf},
@@ -19,7 +20,9 @@ const WATCH_MASK: u32 = libc::IN_CLOSE_WRITE
 
 pub struct ProfileWatcher {
     target: PathBuf,
-    watched_directory: PathBuf,
+    sources: BTreeSet<PathBuf>,
+    attempts: BTreeSet<PathBuf>,
+    directories: BTreeMap<PathBuf, i32>,
     fd: OwnedFd,
 }
 
@@ -33,17 +36,33 @@ impl ProfileWatcher {
         target
             .file_name()
             .context("profile watch target needs a file name")?;
-        let watched_directory = nearest_existing_directory(
-            target
-                .parent()
-                .context("profile watch target needs a parent")?,
-        )?;
-        let fd = watch_directory(&watched_directory)?;
-        Ok(Self {
+        let fd = create_watch()?;
+        let mut watcher = Self {
+            sources: BTreeSet::from([target.clone()]),
             target,
-            watched_directory,
+            attempts: BTreeSet::new(),
+            directories: BTreeMap::new(),
             fd,
-        })
+        };
+        watcher.rearm_to_nearest_parent()?;
+        Ok(watcher)
+    }
+
+    pub fn replace_sources(&mut self, mut sources: BTreeSet<PathBuf>) -> Result<()> {
+        if sources.len() > 64 {
+            bail!("too many profile watch sources");
+        }
+        sources.insert(self.target.clone());
+        self.sources = sources;
+        self.attempts.clear();
+        self.rearm_to_nearest_parent()
+    }
+    pub fn observe_attempts(&mut self, attempts: BTreeSet<PathBuf>) -> Result<()> {
+        if attempts.len() > 64 {
+            bail!("too many requested profile watch sources");
+        }
+        self.attempts = attempts;
+        self.rearm_to_nearest_parent()
     }
 
     pub fn notification_fd(&self) -> RawFd {
@@ -61,6 +80,27 @@ impl ProfileWatcher {
                 unsafe { libc::read(self.fd.as_raw_fd(), bytes.as_mut_ptr().cast(), bytes.len()) };
             if count > 0 {
                 changed = true;
+                let mut offset = 0;
+                while offset + std::mem::size_of::<libc::inotify_event>() <= count as usize {
+                    // SAFETY: a complete kernel event header fits; byte storage may be unaligned.
+                    let event = unsafe {
+                        std::ptr::read_unaligned(
+                            bytes.as_ptr().add(offset).cast::<libc::inotify_event>(),
+                        )
+                    };
+                    if event.mask & (libc::IN_IGNORED | libc::IN_DELETE_SELF | libc::IN_MOVE_SELF)
+                        != 0
+                    {
+                        self.directories.retain(|_, wd| *wd != event.wd);
+                        if event.mask & libc::IN_IGNORED == 0 {
+                            // SAFETY: remove the moved/deleted directory's own live watch.
+                            unsafe {
+                                libc::inotify_rm_watch(self.fd.as_raw_fd(), event.wd);
+                            }
+                        }
+                    }
+                    offset += std::mem::size_of::<libc::inotify_event>() + event.len as usize;
+                }
                 continue;
             }
             if count == 0 {
@@ -81,51 +121,80 @@ impl ProfileWatcher {
     }
 
     fn rearm_to_nearest_parent(&mut self) -> Result<()> {
-        let directory = nearest_existing_directory(
-            self.target
-                .parent()
-                .context("profile watch target needs a parent")?,
-        )?;
-        if directory != self.watched_directory {
-            self.fd = watch_directory(&directory)?;
-            self.watched_directory = directory;
+        let directories = self
+            .sources
+            .union(&self.attempts)
+            .map(|source| {
+                nearest_existing_directory(source.parent().context("profile source lacks parent")?)
+            })
+            .collect::<Result<BTreeSet<_>>>()?;
+        let obsolete: Vec<_> = self
+            .directories
+            .keys()
+            .filter(|path| !directories.contains(*path))
+            .cloned()
+            .collect();
+        for path in obsolete {
+            if let Some(watch) = self.directories.remove(&path) {
+                // SAFETY: this is a watch identifier owned by this inotify fd.
+                unsafe {
+                    libc::inotify_rm_watch(self.fd.as_raw_fd(), watch);
+                }
+            }
+        }
+        for path in directories {
+            if !self.directories.contains_key(&path) {
+                let watch = watch_directory(self.fd.as_raw_fd(), &path)?;
+                self.directories.insert(path, watch);
+            }
         }
         Ok(())
     }
 }
 
 fn nearest_existing_directory(path: &Path) -> Result<PathBuf> {
-    let mut candidate = path;
-    loop {
-        match fs::metadata(candidate) {
-            Ok(metadata) if metadata.is_dir() => return Ok(candidate.to_path_buf()),
-            Ok(_) => bail!("{} is not a directory", candidate.display()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                candidate = candidate.parent().with_context(|| {
-                    format!("no existing parent for profile path {}", path.display())
-                })?;
-            }
+    let mut current = PathBuf::from("/");
+    for component in path.components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            continue;
+        }
+        let candidate = current.join(component.as_os_str());
+        match fs::symlink_metadata(&candidate) {
+            Ok(metadata) if metadata.is_dir() => current = candidate,
+            Ok(_) => return Ok(current), // Watch before a missing or unsafe parent.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(current),
             Err(error) => {
                 return Err(error)
                     .with_context(|| format!("inspect profile parent {}", candidate.display()));
             }
         }
     }
+    Ok(current)
 }
-
-fn watch_directory(path: &Path) -> Result<OwnedFd> {
+fn create_watch() -> Result<OwnedFd> {
+    // SAFETY: scalar flags; inotify_init1 transfers a fresh fd on success.
     let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
     if fd < 0 {
         return Err(std::io::Error::last_os_error()).context("create profile filesystem watch");
     }
-    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    // SAFETY: successful inotify_init1 transfers ownership.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+fn watch_directory(fd: RawFd, path: &Path) -> Result<i32> {
     let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
-        .context("profile parent path contains a NUL byte")?;
-    let descriptor = unsafe { libc::inotify_add_watch(fd.as_raw_fd(), path.as_ptr(), WATCH_MASK) };
-    if descriptor < 0 {
-        return Err(std::io::Error::last_os_error()).context("watch profile parent directory");
+        .context("profile parent contains NUL")?;
+    // SAFETY: fd is live and path is NUL-terminated; kernel retains no pointer.
+    let watch = unsafe {
+        libc::inotify_add_watch(
+            fd,
+            path.as_ptr(),
+            WATCH_MASK | libc::IN_ONLYDIR | libc::IN_DONT_FOLLOW,
+        )
+    };
+    if watch < 0 {
+        return Err(std::io::Error::last_os_error()).context("watch profile parent");
     }
-    Ok(fd)
+    Ok(watch)
 }
 
 #[cfg(test)]
@@ -153,13 +222,57 @@ mod tests {
         fs::create_dir(&directory).unwrap();
         wait_readable(watcher.notification_fd());
         assert!(watcher.drain().unwrap());
-        assert_eq!(watcher.watched_directory, directory);
+        assert!(watcher.directories.contains_key(&directory));
 
         let temporary = directory.join("profiles.toml.new");
         let mut file = fs::File::create(&temporary).unwrap();
         file.write_all(b"version = 1\n").unwrap();
         file.sync_all().unwrap();
         fs::rename(temporary, target).unwrap();
+        wait_readable(watcher.notification_fd());
+        assert!(watcher.drain().unwrap());
+    }
+    #[test]
+    fn missing_include_creation_reloads_after_failed_attempt() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("profiles.toml");
+        fs::write(&target,"version=1\nfallback=\"default\"\n[[profile]]\nid=\"default\"\n[[profile.element]]\nkind=\"flexible-space\"\nminimum=0\nweight=1\n").unwrap();
+        let mut watcher = ProfileWatcher::new(&target).unwrap();
+        let missing = root.path().join("parts/new.toml");
+        watcher
+            .observe_attempts(std::collections::BTreeSet::from([
+                target.clone(),
+                missing.clone(),
+            ]))
+            .unwrap();
+        fs::create_dir(root.path().join("parts")).unwrap();
+        wait_readable(watcher.notification_fd());
+        assert!(watcher.drain().unwrap());
+        fs::write(&missing, "version=1\n").unwrap();
+        wait_readable(watcher.notification_fd());
+        assert!(watcher.drain().unwrap());
+        fs::write(&target,"version=1\nfallback=\"default\"\ninclude=[\"parts/new.toml\"]\n[[profile]]\nid=\"default\"\n[[profile.element]]\nkind=\"flexible-space\"\nminimum=0\nweight=1\n").unwrap();
+        assert_eq!(
+            touchbar_profile_config::load_with_sources(&target)
+                .unwrap()
+                .sources
+                .len(),
+            2
+        );
+    }
+    #[test]
+    fn replaced_parent_directory_is_watched_again() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("parts");
+        fs::create_dir(&directory).unwrap();
+        let mut watcher = ProfileWatcher::new(&directory.join("profiles.toml")).unwrap();
+        fs::rename(&directory, root.path().join("old-parts")).unwrap();
+        wait_readable(watcher.notification_fd());
+        assert!(watcher.drain().unwrap());
+        fs::create_dir(&directory).unwrap();
+        wait_readable(watcher.notification_fd());
+        assert!(watcher.drain().unwrap());
+        fs::write(directory.join("profiles.toml"), "version=1").unwrap();
         wait_readable(watcher.notification_fd());
         assert!(watcher.drain().unwrap());
     }

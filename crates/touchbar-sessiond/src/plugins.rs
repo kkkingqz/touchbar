@@ -363,6 +363,7 @@ impl PackagedProfileCatalog {
                 )
             };
             ProfileDocument {
+                include: Vec::new(),
                 version: PROFILE_CONFIG_VERSION,
                 fallback: "automatic.default".into(),
                 contributions,

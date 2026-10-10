@@ -2279,11 +2279,14 @@ impl State {
         }
     }
 
-    fn reload_profiles(&mut self) -> Result<()> {
+    fn reload_profiles(&mut self) -> Result<std::collections::BTreeSet<PathBuf>> {
         let Some(path) = self.profile_path.clone() else {
-            return Ok(());
+            return Ok(Default::default());
         };
         if !path.exists() {
+            if self.user_profile_document.is_some() {
+                bail!("profile configuration {} disappeared", path.display());
+            }
             let document = self.packaged_profiles.merge(None)?;
             self.replace_effective_profiles(document)?;
             self.user_profile_document = None;
@@ -2291,14 +2294,15 @@ impl State {
                 "profile-source=automatic-all-items config={}",
                 path.display()
             );
-            return Ok(());
+            return Ok(std::collections::BTreeSet::from([path]));
         }
-        let document = touchbar_profile_config::load(&path)?;
+        let loaded = touchbar_profile_config::load_with_sources(&path)?;
+        let document = loaded.document;
         let effective = self.packaged_profiles.merge(Some(&document))?;
         self.replace_effective_profiles(effective)?;
         self.user_profile_document = Some(document);
         println!("profile-source={} reloaded=true", path.display());
-        Ok(())
+        Ok(loaded.sources)
     }
 
     fn replace_effective_profiles(&mut self, document: Option<ProfileDocument>) -> Result<()> {
@@ -4194,19 +4198,25 @@ fn initialize_session_permissions(path: &Path) -> Result<()> {
         .context("initialize session-only plugin permissions")
 }
 
-fn load_live_profiles(
-    args: &Args,
-) -> Result<(
-    Option<LiveProfiles>,
-    Option<ProfileDocument>,
-    Option<PathBuf>,
-)> {
+struct LoadedLiveProfiles {
+    live_profiles: Option<LiveProfiles>,
+    user_profile_document: Option<ProfileDocument>,
+    profile_path: Option<PathBuf>,
+    sources: std::collections::BTreeSet<PathBuf>,
+}
+
+fn load_live_profiles(args: &Args) -> Result<LoadedLiveProfiles> {
     if args.profile_demo && args.profiles.is_some() {
         bail!("--profiles and --profile-demo are mutually exclusive");
     }
     if args.profile_demo {
         println!("profile-source=built-in-demo");
-        return Ok((Some(LiveProfiles::demo()), None, None));
+        return Ok(LoadedLiveProfiles {
+            live_profiles: Some(LiveProfiles::demo()),
+            user_profile_document: None,
+            profile_path: None,
+            sources: Default::default(),
+        });
     }
 
     let explicit = args.profiles.is_some();
@@ -4223,20 +4233,47 @@ fn load_live_profiles(
             "profile-source=automatic-all-items config={}",
             path.display()
         );
-        return Ok((None, None, Some(path)));
+        return Ok(LoadedLiveProfiles {
+            live_profiles: None,
+            user_profile_document: None,
+            profile_path: Some(path.clone()),
+            sources: std::collections::BTreeSet::from([path]),
+        });
     }
-    let document = touchbar_profile_config::load(&path)?;
+    let loaded = touchbar_profile_config::load_with_sources(&path)?;
+    let document = loaded.document;
     println!(
         "profile-source={} profiles={} items={}",
         path.display(),
         document.profile_ids().len(),
         document.item_ids().len()
     );
-    Ok((
-        Some(LiveProfiles::configured(document.clone())),
-        Some(document),
-        Some(path),
-    ))
+    Ok(LoadedLiveProfiles {
+        live_profiles: Some(LiveProfiles::configured(document.clone())),
+        user_profile_document: Some(document),
+        profile_path: Some(path),
+        sources: loaded.sources,
+    })
+}
+
+fn reload_watched_profiles(state: &mut State, watcher: &mut Option<ProfileWatcher>) -> Result<()> {
+    match state.reload_profiles() {
+        Ok(sources) => {
+            if let Some(watcher) = watcher {
+                watcher.replace_sources(sources)?;
+            }
+            Ok(())
+        }
+        Err(error) => {
+            if let (Some(watcher), Some(path)) = (watcher, &state.profile_path)
+                && let Ok(sources) = touchbar_profile_config::requested_sources(path)
+                && let Err(watch_error) = watcher.observe_attempts(sources)
+            {
+                eprintln!("profile-watch=attempt-watch-failed error={watch_error:#}");
+            }
+            Err(error)
+        }
+    }
 }
 
 fn choose_wait_delay(delays: impl IntoIterator<Item = Option<Duration>>) -> Option<Duration> {
@@ -4343,7 +4380,12 @@ fn main() -> Result<()> {
     let args = parse_args();
     install_termination_signal_handlers()?;
     let plugin_paths = touchbar_plugin_store::StorePaths::discover()?;
-    let (live_profiles, user_profile_document, profile_path) = load_live_profiles(&args)?;
+    let LoadedLiveProfiles {
+        live_profiles,
+        user_profile_document,
+        profile_path,
+        sources: profile_sources,
+    } = load_live_profiles(&args)?;
     let mut profile_watcher =
         profile_path
             .as_deref()
@@ -4354,6 +4396,9 @@ fn main() -> Result<()> {
                     None
                 }
             });
+    if let Some(watcher) = &mut profile_watcher {
+        watcher.replace_sources(profile_sources)?;
+    }
     let mut profile_reload_deadline = None;
     if args.plugins {
         // Session decisions deliberately expire with this compositor session.
@@ -4558,7 +4603,8 @@ fn main() -> Result<()> {
                                 .set_packaged_profile_catalog(manager.profile_catalog().clone())?;
                             state.set_appearance_provider(manager.appearance_provider())?;
                         }
-                        state.reload_profiles().context("reload profiles")?;
+                        reload_watched_profiles(&mut state, &mut profile_watcher)
+                            .context("reload profiles")?;
                         Ok("runtime configuration reloaded")
                     })(),
                     touchbar_control::Request::ProfileSelect { profile, .. } => {
@@ -4698,7 +4744,7 @@ fn main() -> Result<()> {
         }
         if profile_reload_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             profile_reload_deadline = None;
-            match state.reload_profiles() {
+            match reload_watched_profiles(&mut state, &mut profile_watcher) {
                 Ok(()) => println!("profile-watch=reloaded"),
                 Err(error) => eprintln!("profile-watch=reload-rejected error={error:#}"),
             }

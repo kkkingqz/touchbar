@@ -165,7 +165,7 @@ flatpak-spawn --host /usr/bin/bash -c \
 
 **Interfaces:** `LoadedProfiles { document: ProfileDocument, sources: BTreeSet<PathBuf> }`; `load_with_sources(path: &Path) -> anyhow::Result<LoadedProfiles>`; существующий `load(path) -> Result<ProfileDocument>` совместимый wrapper. Fragment version 1 содержит profiles/contributions/rules/regions, без fallback и includes. Root `include` указывает список относительных фрагментов. Watcher охватывает root, старые источники и новые запрошенные источники неудачной попытки.
 
-- [ ] Написать `legacy_document_unchanged`, `includes_have_explicit_order`, `nested_include_rejected`, `duplicate_id_rejected`, `include_byte_budgets_exact`, `unsafe_owner_mode_link_rejected`, `missing_include_creation_reloads`, `failed_reload_keeps_last_good_catalog`. Assert max 64 файлов вместе с root, суммарно <=1 MiB; каждый <=256 KiB; ошибка не меняет активную композицию.
+- [x] Написать `legacy_document_unchanged`, `includes_have_explicit_order`, `nested_include_rejected`, `duplicate_id_rejected`, `include_byte_budgets_exact`, `unsafe_owner_mode_link_rejected`, `missing_include_creation_reloads`, `failed_reload_keeps_last_good_catalog`. Assert max 64 файлов вместе с root, суммарно <=1 MiB; каждый <=256 KiB; ошибка не меняет активную композицию.
 
   ```rust
   assert!(load_with_sources(&root_with_65_files).is_err());
@@ -173,10 +173,10 @@ flatpak-spawn --host /usr/bin/bash -c \
   assert_eq!(active_profile_after_failed_reload, active_profile_before);
   assert!(missing_fragment_creation_noticed);
   ```
-- [ ] Выполнить `tb_cargo test -p touchbar-profile-config` и watcher tests; missing include recovery первоначально падает.
-- [ ] Реализовать secure file loading и объединение до общего validate/build. Для path resolution пройти каждый родитель без symlinks, не полагаться только на O_NOFOLLOW конечного файла. Сохранить отсутствие nested includes. Watcher наблюдает nearest existing parents и atomic replacement; конфигурация/каталог меняются только после полного успеха. Explicit user rules остаются выше package selection; одинаковые package priorities имеют стабильный tie-break.
-- [ ] Выполнить focused tests и `scripts/test-profile-control-live.sh` в тестовой host session; GNOME пример выбирает прежние наборы.
-- [ ] Коммит: `feat: load separate profile files with atomic reload`.
+- [x] Выполнить `tb_cargo test -p touchbar-profile-config` и watcher tests; missing include recovery первоначально падает.
+- [x] Реализовать secure file loading и объединение до общего validate/build. Для path resolution пройти каждый родитель без symlinks, не полагаться только на O_NOFOLLOW конечного файла. Сохранить отсутствие nested includes. Watcher наблюдает nearest existing parents и atomic replacement; конфигурация/каталог меняются только после полного успеха. Explicit user rules остаются выше package selection; одинаковые package priorities имеют стабильный tie-break.
+- [x] Выполнить focused tests и `scripts/test-profile-control-live.sh` в тестовой host session; GNOME пример выбирает прежние наборы.
+- [x] Коммит: `feat: load separate profile files with atomic reload`.
 
 ### Task 8: App Actions и доказательство повторного использования
 
