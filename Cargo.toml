@@ -14,6 +14,7 @@ members = [
     "crates/touchbar-plugin-supervisor",
     "crates/touchbar-policy",
     "crates/touchbar-profile-config",
+    "crates/touchbar-set-config",
     "crates/touchbar-protocol",
     "crates/touchbar-ui",
     "crates/touchbar-system-bar",

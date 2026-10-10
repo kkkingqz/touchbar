@@ -72,7 +72,7 @@ flatpak-spawn --host /usr/bin/bash -c \
 
 **Interfaces:** Produces `SetDocument::from_toml(&str) -> anyhow::Result<Self>`, `SetDocument::validate() -> anyhow::Result<()>`; `StateValue::{Bool,Number,Text,List}`, `StateSnapshot(BTreeMap<String, StateValue>)`, `StatePatch`; `LogicDescription` со схемами actions/state. `SetDocument::validate_bindings(&LogicDescription) -> anyhow::Result<()>`; `StateSnapshot::apply(&StatePatch, &LogicDescription) -> anyhow::Result<bool>` применяет patch атомарно и возвращает наличие изменения.
 
-- [ ] Написать тесты `browser_file_is_one_set`, `unknown_fields_are_rejected`, `duplicate_widget_ids_are_rejected`, `limits_match_host_budget`, `state_patch_is_atomic`. Assert: пример из spec содержит 3 кнопки; ошибка при неизвестном поле/повторном ID/NaN; невалидный patch оставляет исходное состояние.
+- [x] Написать тесты `browser_file_is_one_set`, `unknown_fields_are_rejected`, `duplicate_widget_ids_are_rejected`, `limits_match_host_budget`, `state_patch_is_atomic`. Assert: пример из spec содержит 3 кнопки; ошибка при неизвестном поле/повторном ID/NaN; невалидный patch оставляет исходное состояние.
 
   Опорные assertions для этих тестов (переменные создаёт соответствующий fixture):
   ```rust
@@ -81,10 +81,10 @@ flatpak-spawn --host /usr/bin/bash -c \
   assert!(snapshot.apply(&invalid_patch, &description).is_err());
   assert_eq!(snapshot, before);
   ```
-- [ ] Выполнить `tb_cargo test -p touchbar-set-config`; до создания реализации ожидается отсутствие crate/API, после появления тестового crate — ошибки соответствующих тестов.
-- [ ] Реализовать строгую схему версии 1, `logic_config`, selection, layout, panels, theme roles и event bindings. Общие типы event/value и canvas data держать здесь; не импортировать plugin-host, чтобы не образовать цикл зависимостей. Лимиты: 64 items, 256 узлов описания, 512 развёрнутых узлов, depth 32, 16 KiB текста, 512 canvas commands, 2048 points, 256 path segments, 512 fill triangles, 64 animations; effect bounds — существующие touchbar-ui константы. Для миграции разрешить явный `widget_id: u64` наряду со строковым `id`; его дубликаты тоже запрещены.
-- [ ] Выполнить `tb_cargo test -p touchbar-set-config`; все тесты проходят.
-- [ ] Коммит: `feat: define declarative button set schema`.
+- [x] Выполнить `tb_cargo test -p touchbar-set-config`; до создания реализации ожидается отсутствие crate/API, после появления тестового crate — ошибки соответствующих тестов.
+- [x] Реализовать строгую схему версии 1, `logic_config`, selection, layout, panels, theme roles и event bindings. Общие типы event/value и canvas data держать здесь; не импортировать plugin-host, чтобы не образовать цикл зависимостей. Лимиты: 64 items, 256 узлов описания, 512 развёрнутых узлов, depth 32, 16 KiB текста, 512 canvas commands, 2048 points, 256 path segments, 512 fill triangles, 64 animations; effect bounds — существующие touchbar-ui константы. Для миграции разрешить явный `widget_id: u64` наряду со строковым `id`; его дубликаты тоже запрещены.
+- [x] Выполнить `tb_cargo test -p touchbar-set-config`; все тесты проходят.
+- [x] Коммит: `feat: define declarative button set schema`.
 
 ### Task 2: Контракт логики и SDK
 
@@ -262,5 +262,5 @@ WIT; low-level типы не зависят от plugin-host; единицы л�
 и стоимость передачи контекста. Альтернатива — Subagent-driven с отдельным
 исполнителем и ревьюером на каждую задачу.
 
-Статус: план подготовлен; выполнение начинается после просмотра плана и выбора
-метода пользователем. Чекбоксы выше ещё не отмечают выполненные работы.
+Статус: Native выполнение согласовано. Выполненные задачи отмечаются чекбоксами;
+после каждой проверенной задачи создаётся коммит и push в t2-appletbdrm.

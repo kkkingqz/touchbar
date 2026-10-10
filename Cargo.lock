@@ -3665,6 +3665,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "touchbar-set-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "touchbar-system-bar"
 version = "0.1.0"
 dependencies = [
