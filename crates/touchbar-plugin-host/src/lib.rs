@@ -414,6 +414,8 @@ pub const BROKER_FD_ENV: &str = "TOUCHBAR_BROKER_FD";
 pub const COMPONENT_FD_ENV: &str = "TOUCHBAR_COMPONENT_FD";
 pub const MANIFEST_FD_ENV: &str = "TOUCHBAR_MANIFEST_FD";
 pub const ASSET_BUNDLE_FD_ENV: &str = "TOUCHBAR_ASSET_BUNDLE_FD";
+pub const SET_BUNDLE_FD_ENV: &str = "TOUCHBAR_SET_BUNDLE_FD";
+pub const SET_BUNDLE_FD: RawFd = 9;
 pub const BROKER_FD: RawFd = 3;
 pub const COMPONENT_FD: RawFd = 4;
 pub const MANIFEST_FD: RawFd = 5;
@@ -674,6 +676,7 @@ pub fn read_supervisor_file(environment: &str, maximum_bytes: u64) -> Result<Opt
         COMPONENT_FD_ENV => COMPONENT_FD,
         MANIFEST_FD_ENV => MANIFEST_FD,
         ASSET_BUNDLE_FD_ENV => ASSET_BUNDLE_FD,
+        SET_BUNDLE_FD_ENV => SET_BUNDLE_FD,
         _ => bail!("unknown inherited package descriptor variable"),
     };
     if descriptor != expected {

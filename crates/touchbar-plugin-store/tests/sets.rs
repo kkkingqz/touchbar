@@ -154,3 +154,20 @@ fn panel_reuses_owner_without_creating_another_item() {
         Some("browser")
     );
 }
+
+#[test]
+fn direct_set_reader_rejects_fifo_without_blocking() {
+    let root = package();
+    fs::remove_file(root.path().join("sets/browser.toml")).unwrap();
+    let path = std::ffi::CString::new(
+        root.path()
+            .join("sets/browser.toml")
+            .as_os_str()
+            .as_encoded_bytes(),
+    )
+    .unwrap();
+    // SAFETY: path is a live NUL-terminated name for a private test FIFO.
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    let manifest = touchbar_package::PluginManifest::from_toml(MANIFEST).unwrap();
+    assert!(touchbar_package::read_set_files(root.path(), &manifest).is_err());
+}

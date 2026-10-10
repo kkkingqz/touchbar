@@ -24,6 +24,8 @@ wayland-protocols.workspace = true
 zbus.workspace = true
 zeroize.workspace = true
 
+touchbar-set-config = { path = "../touchbar-set-config" }
+
 [dev-dependencies]
 tempfile.workspace = true
 wayland-server.workspace = true

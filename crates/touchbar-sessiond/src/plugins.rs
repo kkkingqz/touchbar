@@ -56,6 +56,8 @@ enum Launch {
     Component {
         digest: String,
         asset_digests: Vec<(String, String)>,
+        set_digests: Vec<(String, String)>,
+        world: String,
     },
     TrustedComponent,
     AppearanceProvider {
@@ -274,6 +276,7 @@ impl AppearanceProviderCatalog {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PackagedProfile {
+    priority: i32,
     source: GithubSource,
     definition: AutomaticProfile,
 }
@@ -315,6 +318,12 @@ impl PackagedProfileCatalog {
                 })
                 .cloned()
                 .map(|definition| PackagedProfile {
+                    priority: manifest
+                        .resolved_sets
+                        .as_ref()
+                        .and_then(|catalog| catalog.priorities.get(&definition.id))
+                        .copied()
+                        .unwrap_or(0),
                     source: source.clone(),
                     definition,
                 }),
@@ -376,7 +385,15 @@ impl PackagedProfileCatalog {
         let application_priority = user_priority_floor.saturating_sub(2);
         let activity_priority = user_priority_floor.saturating_sub(1);
 
-        for packaged in &self.profiles {
+        let mut packaged_profiles: Vec<_> = self.profiles.iter().collect();
+        packaged_profiles.sort_by_key(|packaged| {
+            (
+                std::cmp::Reverse(packaged.priority),
+                &packaged.source,
+                &packaged.definition.id,
+            )
+        });
+        for packaged in packaged_profiles {
             let profile_id = packaged_definition_id(&packaged.source, &packaged.definition.id);
             let contribution_id = format!("{profile_id}.items");
             document.contributions.push(ContributionConfig {
@@ -1082,32 +1099,50 @@ fn desired_state(
             (InstalledRuntime::Component, RuntimeSpec::Component { .. }) if trusted_components => {
                 Launch::TrustedComponent
             }
-            (InstalledRuntime::Component, RuntimeSpec::Component { entrypoint, .. }) => {
-                Launch::Component {
-                    digest: installed
-                        .artifacts
-                        .get(entrypoint)
-                        .context("component digest is missing")?
-                        .clone(),
-                    asset_digests: inspected
-                        .manifest
-                        .assets
-                        .iter()
-                        .map(|asset| {
-                            Ok((
-                                asset.id.clone(),
-                                installed
-                                    .artifacts
-                                    .get(&asset.path)
-                                    .with_context(|| {
-                                        format!("asset digest is missing for {}", asset.id)
-                                    })?
-                                    .clone(),
-                            ))
-                        })
-                        .collect::<Result<Vec<_>>>()?,
-                }
-            }
+            (
+                InstalledRuntime::Component,
+                RuntimeSpec::Component { entrypoint, world }
+                | RuntimeSpec::ButtonSetLogic { entrypoint, world },
+            ) => Launch::Component {
+                world: world.clone(),
+                set_digests: inspected
+                    .manifest
+                    .sets
+                    .iter()
+                    .map(|reference| {
+                        Ok((
+                            reference.file.clone(),
+                            installed
+                                .artifacts
+                                .get(&reference.file)
+                                .context("set digest missing")?
+                                .clone(),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+                digest: installed
+                    .artifacts
+                    .get(entrypoint)
+                    .context("component digest is missing")?
+                    .clone(),
+                asset_digests: inspected
+                    .manifest
+                    .assets
+                    .iter()
+                    .map(|asset| {
+                        Ok((
+                            asset.id.clone(),
+                            installed
+                                .artifacts
+                                .get(&asset.path)
+                                .with_context(|| {
+                                    format!("asset digest is missing for {}", asset.id)
+                                })?
+                                .clone(),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            },
             (InstalledRuntime::Native, RuntimeSpec::Native { targets }) => {
                 let target = current_target();
                 let entrypoint = targets
@@ -1237,6 +1272,8 @@ fn start(supervisor: &Path, host: &Path, paths: &StorePaths, display: &str, proc
         Launch::Component {
             digest,
             asset_digests,
+            set_digests,
+            world: _,
         } => {
             let mut command = Command::new(supervisor);
             command
@@ -1253,6 +1290,9 @@ fn start(supervisor: &Path, host: &Path, paths: &StorePaths, display: &str, proc
                 ]);
             if let Some(policy) = &process.desired.policy {
                 command.arg("--package-digest").arg(&policy.package.digest);
+            }
+            for (path, digest) in set_digests {
+                command.arg("--set-digest").arg(format!("{path}={digest}"));
             }
             for (id, digest) in asset_digests {
                 command.arg("--asset-digest").arg(format!("{id}={digest}"));
@@ -1508,6 +1548,7 @@ mod tests {
         PackagedProfileCatalog {
             enabled_items: Vec::new(),
             profiles: vec![PackagedProfile {
+                priority: 0,
                 source,
                 definition: AutomaticProfile {
                     id: "screensaver".into(),
@@ -1521,6 +1562,19 @@ mod tests {
             }],
             manages_default_visibility: true,
         }
+    }
+
+    #[test]
+    fn package_selection_priorities_have_a_stable_tie_break_below_user_rules() {
+        let mut catalog = packaged_profiles();
+        let mut high = catalog.profiles[0].clone();
+        high.definition.id = "priority".into();
+        high.priority = 10;
+        catalog.profiles.push(high);
+        let document = catalog.merge(None).unwrap().unwrap();
+        assert!(document.rules[0].profile.ends_with(".priority"));
+        assert_eq!(document.rules[0].priority, -1);
+        assert_eq!(document.rules[1].priority, -2);
     }
 
     #[test]

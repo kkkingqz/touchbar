@@ -3601,6 +3601,7 @@ dependencies = [
  "touchbar-package",
  "touchbar-policy",
  "touchbar-protocol",
+ "touchbar-set-config",
  "url",
  "wayland-client",
  "wayland-protocols",

@@ -33,6 +33,7 @@ mod replay;
 mod replay_gpu;
 
 const USAGE: &str = "usage:\n  touchbar-plugin-host PACKAGE [ITEM] [WIDTH] [ACTIVATE_WIDGET]\n  touchbar-plugin-host PACKAGE --replay SCENARIO.json [--screenshots DIRECTORY]\n  touchbar-plugin-host PACKAGE --live [--item ITEM] [--width WIDTH] [--frames N] [--require-hardware]";
+const SET_BUNDLE_FD_ENV: &str = "TOUCHBAR_SET_BUNDLE_FD";
 const APPEARANCE_PROVIDER_TICK_INTERVAL: Duration = Duration::from_millis(250);
 
 struct OpenedPackage {
@@ -322,15 +323,20 @@ fn open_package(
         read_supervisor_file(COMPONENT_FD_ENV, MAX_INHERITED_COMPONENT_BYTES)?;
     let inherited_assets =
         read_supervisor_file(ASSET_BUNDLE_FD_ENV, MAX_INHERITED_ASSET_BUNDLE_BYTES)?;
+    let inherited_sets = read_supervisor_file(
+        SET_BUNDLE_FD_ENV,
+        touchbar_set_config::MAX_SET_BUNDLE_BYTES as u64,
+    )?;
     let (manifest, component, mut host, replay_broker) = match (
         supervised,
         inherited_manifest,
         inherited_component,
         inherited_assets,
+        inherited_sets,
     ) {
-        (true, Some(manifest), Some(component), assets) => {
+        (true, Some(manifest), Some(component), assets, sets) => {
             apply_component_confinement(live)?;
-            let manifest = PluginManifest::from_toml(
+            let mut manifest = PluginManifest::from_toml(
                 std::str::from_utf8(&manifest).context("verified manifest is not UTF-8")?,
             )?;
             let assets = match (manifest.assets.is_empty(), assets) {
@@ -348,17 +354,36 @@ fn open_package(
                     bail!("touchbar-plugin-host requires a component package")
                 }
             };
-            if matches!(manifest.runtime, RuntimeSpec::ButtonSetLogic { .. }) {
-                bail!("button sets require verified sealed set transport");
-            }
-            let mut host = PluginRuntime::from_bytes_with_broker(&component, limits, broker)?;
+            let mut host = if matches!(manifest.runtime, RuntimeSpec::ButtonSetLogic { .. }) {
+                let bundle = sets.context("supervised button sets require a sealed set bundle")?;
+                let files = touchbar_set_config::SetBundle::decode(&bundle)?.files;
+                let catalog = touchbar_package::resolve_set_catalog(&manifest, &files)?;
+                let selected = requested
+                    .or_else(|| manifest.sets.first().map(|reference| reference.id.as_str()))
+                    .context("no sets declared")?;
+                let set = catalog
+                    .documents
+                    .get(selected)
+                    .context("unknown set")?
+                    .clone();
+                manifest.resolved_sets = Some(catalog);
+                touchbar_plugin_host::sets::ButtonSetHost::from_bytes_with_broker(
+                    &component, set, limits, broker,
+                )?
+                .into()
+            } else {
+                if sets.is_some() {
+                    bail!("unsolicited set bundle on legacy runtime");
+                }
+                PluginRuntime::from_bytes_with_broker(&component, limits, broker)?
+            };
             host.set_assets(assets);
             (manifest, display, host, None)
         }
-        (true, _, _, _) => {
+        (true, _, _, _, _) => {
             bail!("supervised host requires sealed component and manifest descriptors")
         }
-        (false, None, None, None) => {
+        (false, None, None, None, None) => {
             let manifest_path = root.join(MANIFEST_FILE_NAME);
             let mut manifest = PluginManifest::from_toml(
                 &fs::read_to_string(&manifest_path)
@@ -413,7 +438,7 @@ fn open_package(
             host.set_assets(assets);
             (manifest, component, host, replay_broker)
         }
-        (false, _, _, _) => bail!("sealed package descriptors require supervisor transport"),
+        (false, _, _, _, _) => bail!("sealed package descriptors require supervisor transport"),
     };
     let world = match &manifest.runtime {
         RuntimeSpec::Component { world, .. } | RuntimeSpec::ButtonSetLogic { world, .. } => {

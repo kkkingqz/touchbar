@@ -100,6 +100,7 @@ done
 "$project_dir/scripts/test-presentation-policies.sh"
 "$project_dir/scripts/test-component-presentations.sh"
 "$project_dir/scripts/test-component-host.sh" >/dev/null
+"$project_dir/scripts/test-supervised-button-sets.sh"
 "$project_dir/scripts/test-plugin-scaffold.sh"
 "$project_dir/scripts/test-session-permission-live.sh"
 "$project_dir/scripts/test-canvas-component-ui.sh"

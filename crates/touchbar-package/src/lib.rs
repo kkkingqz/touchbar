@@ -128,6 +128,17 @@ impl PluginManifest {
         for (index, reference) in self.sets.iter().enumerate() {
             validate_kebab_id(&mut issues, &format!("sets[{index}].id"), &reference.id);
             validate_package_path(&mut issues, &format!("sets[{index}].file"), &reference.file);
+            if reference.file.len() > 256
+                || reference
+                    .file
+                    .split('/')
+                    .any(|part| part.is_empty() || matches!(part, "." | ".."))
+            {
+                issues.push(ValidationIssue::new(
+                    "sets.file",
+                    "requires a literal normalized path of at most 256 bytes",
+                ));
+            }
             if !reference.file.ends_with(".toml") {
                 issues.push(ValidationIssue::new("sets.file", "requires a TOML file"));
             }

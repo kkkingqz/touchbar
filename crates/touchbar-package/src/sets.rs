@@ -53,6 +53,7 @@ pub fn read_set_files(
             let name = CString::new(name.as_bytes())?;
             let last = components.peek().is_none();
             let flags = libc::O_RDONLY
+                | libc::O_NONBLOCK
                 | libc::O_NOFOLLOW
                 | libc::O_CLOEXEC
                 | if last { 0 } else { libc::O_DIRECTORY };

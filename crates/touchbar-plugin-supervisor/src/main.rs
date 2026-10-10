@@ -40,6 +40,8 @@ const BROKER_FD: i32 = 3;
 const COMPONENT_FD: i32 = 4;
 const MANIFEST_FD: i32 = 5;
 const ASSET_BUNDLE_FD: i32 = 6;
+const SET_BUNDLE_FD: i32 = 9;
+const SET_BUNDLE_FD_ENV: &str = "TOUCHBAR_SET_BUNDLE_FD";
 const APPEARANCE_SINK_FD: i32 = 7;
 const BROKER_FD_ENV: &str = "TOUCHBAR_BROKER_FD";
 const COMPONENT_FD_ENV: &str = "TOUCHBAR_COMPONENT_FD";
@@ -51,7 +53,7 @@ const SHORTCUT_FD: i32 = 8;
 const SHORTCUT_FD_ENV: &str = "TOUCHBAR_SHORTCUT_FD";
 const MAX_COMPONENT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
-const USAGE: &str = "usage: touchbar-plugin-supervisor PACKAGE --host HOST --source github:OWNER/REPO --version VERSION --digest sha256:HEX [--package-digest sha256:HEX] [--appearance-provider ID] [--asset-digest ID=sha256:HEX]... --provenance verified-release|unverified-release|local-development --state DIRECTORY [--grants FILE] [--session-grants FILE] [--media-session FILE] [--audit FILE] [-- HOST_ARGUMENTS...]";
+const USAGE: &str = "usage: touchbar-plugin-supervisor PACKAGE --host HOST --source github:OWNER/REPO --version VERSION --digest sha256:HEX [--package-digest sha256:HEX] [--appearance-provider ID] [--asset-digest ID=sha256:HEX]... [--set-digest PATH=sha256:HEX]... --provenance verified-release|unverified-release|local-development --state DIRECTORY [--grants FILE] [--session-grants FILE] [--media-session FILE] [--audit FILE] [-- HOST_ARGUMENTS...]";
 
 struct Arguments {
     package: PathBuf,
@@ -62,6 +64,7 @@ struct Arguments {
     package_digest: Option<String>,
     appearance_provider: Option<String>,
     asset_digests: Vec<String>,
+    set_digests: Vec<String>,
     provenance: Provenance,
     state: PathBuf,
     grants: Option<PathBuf>,
@@ -180,6 +183,18 @@ fn run() -> Result<u8> {
         })
         .transpose()?
         .flatten();
+    let set_artifact = if arguments.appearance_provider.is_none() {
+        seal_verified_sets(
+            root_descriptor.as_raw_fd(),
+            &manifest,
+            &arguments.set_digests,
+        )?
+    } else {
+        if !arguments.set_digests.is_empty() {
+            bail!("set digests supplied to appearance worker");
+        }
+        None
+    };
     let registry = CapabilityRegistry::default();
     let mut requests = registry
         .normalize(&manifest)
@@ -250,6 +265,7 @@ fn run() -> Result<u8> {
             &component_artifact,
             &manifest_artifact,
             asset_artifact.as_ref(),
+            set_artifact.as_ref(),
             visual_backends.as_ref(),
             appearance_backend.as_ref(),
         )? {
@@ -303,6 +319,7 @@ fn run() -> Result<u8> {
             &component_artifact,
             &manifest_artifact,
             asset_artifact.as_ref(),
+            set_artifact.as_ref(),
             visual_backends.as_ref(),
             appearance_backend.as_ref(),
         )? {
@@ -381,6 +398,7 @@ fn run_session(
     component_artifact: &OwnedFd,
     manifest_artifact: &OwnedFd,
     asset_artifact: Option<&OwnedFd>,
+    set_artifact: Option<&OwnedFd>,
     visual_backends: Option<&VisualBackends>,
     appearance_backend: Option<&Arc<AppearanceProviderBackend>>,
 ) -> Result<SessionOutcome> {
@@ -414,6 +432,10 @@ fn run_session(
         .as_ref()
         .map(|assets| duplicate_for_child(assets.as_raw_fd(), 10))
         .transpose()?;
+    let inherited_sets = set_artifact
+        .as_ref()
+        .map(|sets| duplicate_for_child(sets.as_raw_fd(), 10))
+        .transpose()?;
     let component_cgroup =
         ComponentCgroup::create(instance_id).context("create mandatory component-host cgroup")?;
     let component_tasks = component_task_limit(COMPONENT_TASK_MARGIN)?;
@@ -421,6 +443,7 @@ fn run_session(
     let component_source = inherited_component.as_raw_fd();
     let manifest_source = inherited_manifest.as_raw_fd();
     let asset_source = inherited_assets.as_ref().map(AsRawFd::as_raw_fd);
+    let set_source = inherited_sets.as_ref().map(AsRawFd::as_raw_fd);
     let cgroup_processes = component_cgroup.processes_fd();
     // SAFETY: getpid takes no arguments.
     let supervisor_pid = unsafe { libc::getpid() };
@@ -438,6 +461,9 @@ fn run_session(
         command.args(["--appearance-provider-worker", provider]);
     } else {
         command.args(&arguments.host_arguments);
+    }
+    if set_source.is_some() {
+        command.env(SET_BUNDLE_FD_ENV, SET_BUNDLE_FD.to_string());
     }
     if asset_source.is_some() {
         command.env(ASSET_BUNDLE_FD_ENV, ASSET_BUNDLE_FD.to_string());
@@ -501,7 +527,17 @@ fn run_session(
             if asset_source.is_none() {
                 libc::close(ASSET_BUNDLE_FD);
             }
-            if libc::syscall(libc::SYS_close_range, 7_u32, u32::MAX, 0_u32) != 0 {
+            if let Some(source) = set_source {
+                if libc::dup2(source, SET_BUNDLE_FD) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            } else {
+                libc::close(SET_BUNDLE_FD);
+            }
+            // 7/8 remain supervisor-only channels. 9 belongs to the set bundle.
+            if libc::syscall(libc::SYS_close_range, 7_u32, 8_u32, 0_u32) != 0
+                || libc::syscall(libc::SYS_close_range, 10_u32, u32::MAX, 0_u32) != 0
+            {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
@@ -518,6 +554,7 @@ fn run_session(
         inherited_component,
         inherited_manifest,
         inherited_assets,
+        inherited_sets,
     ));
     drop(host_channel);
 
@@ -680,6 +717,7 @@ fn parse_arguments() -> Result<Arguments> {
     let mut package_digest = None;
     let mut appearance_provider = None;
     let mut asset_digests = Vec::new();
+    let mut set_digests = Vec::new();
     let mut provenance = None;
     let mut state = None;
     let mut grants = None;
@@ -720,6 +758,11 @@ fn parse_arguments() -> Result<Arguments> {
                 appearance_provider =
                     Some(values.next().context("--appearance-provider requires ID")?)
             }
+            "--set-digest" => set_digests.push(
+                values
+                    .next()
+                    .context("--set-digest requires PATH=sha256:HEX")?,
+            ),
             "--asset-digest" => asset_digests.push(
                 values
                     .next()
@@ -786,6 +829,7 @@ fn parse_arguments() -> Result<Arguments> {
         package_digest,
         appearance_provider,
         asset_digests,
+        set_digests,
         provenance: provenance.context("--provenance is required")?,
         state: state.context("--state is required")?,
         grants,
@@ -856,7 +900,7 @@ fn open_package_root(path: &Path) -> Result<OwnedFd> {
 fn open_beneath(root: i32, path: &Path) -> Result<OwnedFd> {
     let path = CString::new(path.as_os_str().as_bytes()).context("package path contains NUL")?;
     let how = OpenHow {
-        flags: (libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW) as u64,
+        flags: (libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK) as u64,
         mode: 0,
         resolve: 0x01 | 0x02 | 0x04 | 0x08,
     };
@@ -964,6 +1008,63 @@ fn seal_verified_assets(
     }
     let bundle = encode_asset_bundle(assets.iter().map(|(id, bytes)| (*id, bytes.as_slice())))?;
     Ok(Some(seal_bytes("touchbar-assets", &bundle)?))
+}
+
+fn seal_verified_sets(
+    root: i32,
+    manifest: &PluginManifest,
+    supplied: &[String],
+) -> Result<Option<OwnedFd>> {
+    let mut expected = BTreeMap::new();
+    for value in supplied {
+        let (path, digest) = value
+            .split_once('=')
+            .context("--set-digest must be PATH=sha256:HEX")?;
+        validate_digest(digest)?;
+        if expected.insert(path, digest).is_some() {
+            bail!("duplicate --set-digest path");
+        }
+    }
+    if expected.len() != manifest.sets.len()
+        || manifest
+            .sets
+            .iter()
+            .any(|reference| !expected.contains_key(reference.file.as_str()))
+    {
+        bail!("set digests do not exactly match the sealed package manifest");
+    }
+    if manifest.sets.is_empty() {
+        return Ok(None);
+    }
+    let mut files = BTreeMap::new();
+    for reference in &manifest.sets {
+        let descriptor = open_beneath(root, Path::new(&reference.file))?;
+        let metadata = descriptor_metadata(descriptor.as_raw_fd())?;
+        if metadata.st_mode & libc::S_IFMT != libc::S_IFREG
+            || metadata.st_nlink != 1
+            || metadata.st_size < 0
+            || metadata.st_size > 256 * 1024
+        {
+            bail!("set must be a bounded single-link regular file");
+        }
+        let mut bytes = Vec::new();
+        fs::File::from(descriptor)
+            .take(256 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > 256 * 1024 {
+            bail!("set exceeds 256 KiB");
+        }
+        if format!("sha256:{:x}", Sha256::digest(&bytes)) != expected[reference.file.as_str()] {
+            bail!(
+                "set {} digest does not match installer lock",
+                reference.file
+            );
+        }
+        files.insert(reference.file.clone(), bytes);
+    }
+    touchbar_package::resolve_set_catalog(manifest, &files)?;
+    let bundle = touchbar_set_config::SetBundle::encode(&files)?;
+    Ok(Some(seal_bytes("touchbar-sets", &bundle)?))
 }
 
 fn read_verified_asset(source: OwnedFd, expected_digest: &str, id: &str) -> Result<Vec<u8>> {
@@ -1135,5 +1236,54 @@ label = "second-state"
                 .collect::<Vec<_>>(),
             vec!["first-state"]
         );
+    }
+    #[test]
+    fn set_digest_mismatch_membership_and_sealed_bytes() {
+        use std::io::{Seek, SeekFrom};
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("sets")).unwrap();
+        let source = b"version=1\nid=\"main\"\nlabel=\"Original\"\n[layout]\nkind=\"text\"\ntext=\"Original\"\n";
+        fs::write(root.path().join("sets/main.toml"), source).unwrap();
+        let mut manifest = worker_manifest();
+        manifest.items.clear();
+        manifest.runtime = RuntimeSpec::ButtonSetLogic {
+            entrypoint: "component/plugin.wasm".into(),
+            world: touchbar_package::SUPPORTED_BUTTON_SET_WORLD.into(),
+        };
+        manifest.sets = vec![touchbar_package::SetReference {
+            id: "main".into(),
+            file: "sets/main.toml".into(),
+        }];
+        let directory = open_package_root(root.path()).unwrap();
+        let expected = format!("sets/main.toml=sha256:{:x}", Sha256::digest(source));
+        assert!(seal_verified_sets(directory.as_raw_fd(), &manifest, &[]).is_err());
+        assert!(
+            seal_verified_sets(
+                directory.as_raw_fd(),
+                &manifest,
+                &[expected.clone(), expected.clone()]
+            )
+            .is_err()
+        );
+        let sealed = seal_verified_sets(
+            directory.as_raw_fd(),
+            &manifest,
+            std::slice::from_ref(&expected),
+        )
+        .unwrap()
+        .unwrap();
+        fs::write(root.path().join("sets/main.toml"), b"tampered").unwrap();
+        assert!(seal_verified_sets(directory.as_raw_fd(), &manifest, &[expected]).is_err());
+        let mut file = fs::File::from(sealed);
+        file.seek(SeekFrom::Start(0)).unwrap();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        assert_eq!(
+            touchbar_set_config::SetBundle::decode(&bytes)
+                .unwrap()
+                .files["sets/main.toml"],
+            source
+        );
+        assert!(file.write_all(b"overwrite").is_err());
     }
 }

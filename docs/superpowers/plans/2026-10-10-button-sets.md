@@ -153,11 +153,11 @@ flatpak-spawn --host /usr/bin/bash -c \
 
 **Interfaces:** `SetBundle::encode(&BTreeMap<String, Vec<u8>>) -> anyhow::Result<Vec<u8>>`, `SetBundle::decode(&[u8]) -> anyhow::Result<Self>` — bounded, no duplicate/unexpected paths. `seal_verified_sets(root, manifest, expected_digests) -> anyhow::Result<OwnedFd>` передаёт полный каталог. Reserved child FD 9, env `TOUCHBAR_SET_BUNDLE_FD`; temporary duplicates остаются >=10. Launch Component дополняется set digests и world, влияющими на Desired equality/restart.
 
-- [ ] Написать `set_digest_mismatch_rejected`, `bundle_members_exactly_match_manifest`, `production_uses_sealed_set_bytes`, `missing_bundle_rejected`, `unexpected_bundle_on_legacy_rejected`, `legacy_fds_unchanged`. Assert замена файла после sealing не меняет показанный набор; до sealing выявляется digest mismatch.
-- [ ] Выполнить unit tests bundle/supervisor и новый host acceptance до реализации; ожидается failure при новом runtime.
-- [ ] Реализовать sealing с O_NOFOLLOW, file/size/digest проверкой и существующими memfd seals; exact manifest membership. Не перечитывать paths в supervised host. Session manager использует catalog tasks 5 для presentation, selection и launch; policy RuntimeKind остаётся Component. CLI unsupervised/headless читает пакет явно и применяет те же проверки схемы; unsolicited inherited FD запрещён.
-- [ ] Выполнить focused tests и `test-supervised-button-sets.sh` через host ci-session; закрытие/ошибка всех descriptor branches не даёт FD leaks. Добавить acceptance в packaging campaign.
-- [ ] Коммит: `feat: launch verified button sets through supervisor`.
+- [x] Написать `set_digest_mismatch_rejected`, `bundle_members_exactly_match_manifest`, `production_uses_sealed_set_bytes`, `missing_bundle_rejected`, `unexpected_bundle_on_legacy_rejected`, `legacy_fds_unchanged`. Assert замена файла после sealing не меняет показанный набор; до sealing выявляется digest mismatch.
+- [x] Выполнить unit tests bundle/supervisor и новый host acceptance до реализации; ожидается failure при новом runtime.
+- [x] Реализовать sealing с O_NOFOLLOW, file/size/digest проверкой и существующими memfd seals; exact manifest membership. Не перечитывать paths в supervised host. Session manager использует catalog tasks 5 для presentation, selection и launch; policy RuntimeKind остаётся Component. CLI unsupervised/headless читает пакет явно и применяет те же проверки схемы; unsolicited inherited FD запрещён.
+- [x] Выполнить focused tests и `test-supervised-button-sets.sh` через host ci-session; закрытие/ошибка всех descriptor branches не даёт FD leaks. Добавить acceptance в packaging campaign.
+- [x] Коммит: `feat: launch verified button sets through supervisor`.
 
 ### Task 7: Отдельные пользовательские профили и atomic reload
 
