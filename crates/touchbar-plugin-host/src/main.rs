@@ -953,11 +953,22 @@ impl Application for ComponentApplication {
                     width: anchor.width,
                 }
             }
-            PresentationSessionEvent::Started { session_id, .. } => {
+            PresentationSessionEvent::Started {
+                session_id,
+                lifecycle,
+                ..
+            } => {
                 if self.active_presentation_session != Some(session_id) {
                     return Ok(());
                 }
-                ComponentPresentationEvent::Started
+                ComponentPresentationEvent::StartedWithLifecycle(match lifecycle {
+                    SessionPresentationLifecycle::Persistent => {
+                        ComponentPresentationLifecycle::Persistent
+                    }
+                    SessionPresentationLifecycle::Transient { .. } => {
+                        ComponentPresentationLifecycle::Transient
+                    }
+                })
             }
             PresentationSessionEvent::Ended { session_id, reason } => {
                 if self.active_presentation_session != Some(session_id) {
@@ -1149,5 +1160,123 @@ mod tests {
             app.interactions.tick(Duration::from_millis(421)).as_slice(),
             [UiEvent::LongPressed { .. }]
         ));
+    }
+    #[test]
+    fn native_presentation_uses_lifecycle_to_select_panel() {
+        let bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/wasm32-wasip2/release/touchbar_button_set_logic_demo.wasm"),
+        )
+        .unwrap();
+        let set = touchbar_set_config::SetDocument::from_toml(
+            r#"
+version=1
+id="counter"
+label="Counter"
+expanded_panel="details"
+press_and_hold_panel="hold"
+[layout]
+kind="button"
+widget_id=10
+label="Primary"
+on_activate="increment"
+[[panels]]
+id="details"
+[panels.layout]
+kind="button"
+widget_id=90
+label="Details"
+on_activate="increment"
+[[panels]]
+id="hold"
+[panels.layout]
+kind="button"
+widget_id=91
+label="Hold"
+on_activate="increment"
+"#,
+        )
+        .unwrap();
+        let host = touchbar_plugin_host::sets::ButtonSetHost::from_bytes_with_broker(
+            &bytes,
+            set,
+            HostLimits::default(),
+            None,
+        )
+        .unwrap();
+        let mut app = ComponentApplication {
+            host: host.into(),
+            item: "counter".into(),
+            renderer: None,
+            ui: None,
+            interactions: InteractionState::default(),
+            interaction_map: InteractionMap::default(),
+            appearance: Appearance::default(),
+            width: 160,
+            height: 60,
+            visible: true,
+            shown: true,
+            max_frames: None,
+            started: Instant::now(),
+            next_presentation_session: 8,
+            active_presentation_session: Some(7),
+            presentation_requests: VecDeque::new(),
+        };
+        app.rebuild().unwrap();
+        app.presentation_session_changed(PresentationSessionEvent::Started {
+            session_id: 7,
+            policy: SessionPresentationPolicy::Anchored,
+            lifecycle: SessionPresentationLifecycle::Transient { contact_id: 1 },
+        })
+        .unwrap();
+        let bounds = app.viewport().unwrap();
+        assert_eq!(
+            app.ui
+                .as_mut()
+                .unwrap()
+                .resolve(bounds, app.appearance.theme)
+                .inspector
+                .semantics
+                .id
+                .unwrap()
+                .0,
+            91
+        );
+        app.presentation_session_changed(PresentationSessionEvent::Ended {
+            session_id: 7,
+            reason: PresentationDismissReason::Requested,
+        })
+        .unwrap();
+        assert_eq!(
+            app.ui
+                .as_mut()
+                .unwrap()
+                .resolve(bounds, app.appearance.theme)
+                .inspector
+                .semantics
+                .id
+                .unwrap()
+                .0,
+            10
+        );
+        app.active_presentation_session = Some(8);
+        app.presentation_session_changed(PresentationSessionEvent::Started {
+            session_id: 8,
+            policy: SessionPresentationPolicy::Anchored,
+            lifecycle: SessionPresentationLifecycle::Persistent,
+        })
+        .unwrap();
+        assert_eq!(
+            app.ui
+                .as_mut()
+                .unwrap()
+                .resolve(bounds, app.appearance.theme)
+                .inspector
+                .semantics
+                .id
+                .unwrap()
+                .0,
+            90
+        );
     }
 }

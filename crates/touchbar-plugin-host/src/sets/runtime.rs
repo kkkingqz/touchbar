@@ -5,9 +5,10 @@ use super::{
 };
 use crate::{
     Appearance, BrokerClient, CallbackPhase, ComponentPresentationEndReason,
-    ComponentPresentationEvent, ComponentUpdate, HostLimits, HostState, HostedItem, InputEvent,
-    PackageAssets, activation_for_input, create_linker, create_store, from_wit_update,
-    to_wit_broker_event, to_wit_capability_state, to_wit_theme, wit, wit_broker,
+    ComponentPresentationEvent, ComponentPresentationLifecycle, ComponentUpdate, HostLimits,
+    HostState, HostedItem, InputEvent, PackageAssets, activation_for_input, create_linker,
+    create_store, from_wit_update, to_wit_broker_event, to_wit_capability_state, to_wit_theme, wit,
+    wit_broker,
 };
 use anyhow::{Result, anyhow, bail};
 use std::{
@@ -31,6 +32,7 @@ pub struct ButtonSetHost {
     context: Option<(Rect, Appearance)>,
     guest_render_calls: u64,
     visible: bool,
+    selected_panel: Option<String>,
 }
 
 impl ButtonSetHost {
@@ -87,6 +89,7 @@ impl ButtonSetHost {
             context: None,
             guest_render_calls: 0,
             visible: true,
+            selected_panel: None,
         })
     }
     pub fn snapshot(&self) -> &StateSnapshot {
@@ -144,14 +147,35 @@ impl ButtonSetHost {
             self.apply_update(result?.map_err(|message| anyhow!(message))?, false)?;
             self.context = Some((viewport, appearance));
         }
-        let ui = self
-            .compiled
-            .render(&self.state, viewport, appearance, now, &self.assets)?;
-        // Removed keyed targets get cancellation without physical activation.
-        for event in self.compiled.drain_cancelled() {
-            self.deliver_action(event, None, false)?;
+        // Each pass can cancel captured contacts only once. Rebuild after their
+        // patches so the returned scene and routing agree with authoritative state.
+        for _ in 0..=super::bindings::MAX_CONTACTS {
+            let ui = if let Some(panel) = &self.selected_panel {
+                self.compiled.render_panel(
+                    panel,
+                    &self.state,
+                    viewport,
+                    appearance,
+                    now,
+                    &self.assets,
+                )?
+            } else {
+                self.compiled
+                    .render(&self.state, viewport, appearance, now, &self.assets)?
+            };
+            if !self.deliver_cancelled()? {
+                return Ok(ui);
+            }
         }
-        Ok(ui)
+        bail!("cancellation patches did not converge within contact budget")
+    }
+
+    fn deliver_cancelled(&mut self) -> Result<bool> {
+        let mut changed = false;
+        for event in self.compiled.drain_cancelled() {
+            changed |= self.deliver_action(event, None, false)?.rerender;
+        }
+        Ok(changed)
     }
     pub fn guest_render_calls(&self) -> u64 {
         self.guest_render_calls
@@ -224,11 +248,11 @@ impl ButtonSetHost {
     }
     pub fn handle_visibility_changed(&mut self, item: &str, visible: bool) -> Result<bool> {
         self.check_item(item)?;
+        let mut changed = false;
         if !visible {
             self.compiled.cancel_contacts()?;
-            for event in self.compiled.drain_cancelled() {
-                self.deliver_action(event, None, false)?;
-            }
+            changed |= self.deliver_cancelled()?;
+            changed |= self.selected_panel.take().is_some();
         }
         self.visible = visible;
         self.refuel()?;
@@ -237,19 +261,34 @@ impl ButtonSetHost {
             .bindings
             .call_handle_visibility_changed(&mut self.store, visible);
         self.store.data_mut().phase = None;
-        Ok(self
-            .apply_update(result?.map_err(|message| anyhow!(message))?, false)?
-            .rerender)
+        Ok(changed
+            | self
+                .apply_update(result?.map_err(|message| anyhow!(message))?, false)?
+                .rerender)
     }
     pub fn handle_presentation_event(
         &mut self,
         event: ComponentPresentationEvent,
     ) -> Result<ComponentUpdate> {
+        let mut changed = false;
+        let panel = match event {
+            ComponentPresentationEvent::Started
+            | ComponentPresentationEvent::StartedWithLifecycle(
+                ComponentPresentationLifecycle::Persistent,
+            ) => Some(self.compiled.document.expanded_panel.clone()),
+            ComponentPresentationEvent::StartedWithLifecycle(
+                ComponentPresentationLifecycle::Transient,
+            ) => Some(self.compiled.document.press_and_hold_panel.clone()),
+            ComponentPresentationEvent::Ended(_) => Some(None),
+            _ => None,
+        };
+        if let Some(panel) = panel {
+            changed |= self.selected_panel != panel;
+            self.selected_panel = panel;
+        }
         if matches!(event, ComponentPresentationEvent::Ended(_)) {
             self.compiled.cancel_contacts()?;
-            for cancelled in self.compiled.drain_cancelled() {
-                self.deliver_action(cancelled, None, false)?;
-            }
+            changed |= self.deliver_cancelled()?;
         }
         self.refuel()?;
         self.store.data_mut().phase = Some(CallbackPhase::HostEvent);
@@ -257,7 +296,10 @@ impl ButtonSetHost {
             ComponentPresentationEvent::Anchor { x, width } => {
                 wit::PresentationEvent::Anchor(wit::PresentationAnchor { x, width })
             }
-            ComponentPresentationEvent::Started => wit::PresentationEvent::Started,
+            ComponentPresentationEvent::Started
+            | ComponentPresentationEvent::StartedWithLifecycle(_) => {
+                wit::PresentationEvent::Started
+            }
             ComponentPresentationEvent::Ended(reason) => {
                 wit::PresentationEvent::Ended(match reason {
                     ComponentPresentationEndReason::Requested => {
@@ -286,7 +328,9 @@ impl ButtonSetHost {
             .bindings
             .call_handle_presentation_event(&mut self.store, event);
         self.store.data_mut().phase = None;
-        self.apply_update(result?.map_err(|message| anyhow!(message))?, false)
+        let mut update = self.apply_update(result?.map_err(|message| anyhow!(message))?, false)?;
+        update.rerender |= changed;
+        Ok(update)
     }
     pub fn broker_generation(&self) -> Option<u64> {
         self.store

@@ -81,6 +81,8 @@ struct Media {
     received: Option<Instant>,
     /// The scrubber's value while a finger drags it.
     scrub: Option<f32>,
+    /// Cleared on track replacement; subsequent motion needs a fresh Down.
+    scrub_contact: Option<u32>,
     pending_seek: Option<PendingSeek>,
     presenting: bool,
 }
@@ -99,6 +101,7 @@ impl Default for Media {
             session: None,
             received: None,
             scrub: None,
+            scrub_contact: None,
             pending_seek: None,
             presenting: false,
         }
@@ -457,6 +460,7 @@ impl Media {
         self.subscribe_request = None;
         self.session = None;
         self.scrub = None;
+        self.scrub_contact = None;
         self.pending_seek = None;
     }
 
@@ -470,6 +474,7 @@ impl Media {
         // A scrub or seek meant for another track no longer applies.
         if !same_track {
             self.scrub = None;
+            self.scrub_contact = None;
             self.pending_seek = None;
         }
         if let (Some(pending), Some(session)) = (&mut self.pending_seek, &state.session) {
@@ -507,19 +512,35 @@ impl Media {
             (COMPACT_TOGGLE | TOGGLE, InputKind::Activated) => self.command(MediaAction::PlayPause),
             (PREVIOUS, InputKind::Activated) => self.command(MediaAction::Previous),
             (NEXT, InputKind::Activated) => self.command(MediaAction::Next),
-            (SCRUBBER, InputKind::ValueChanged) => {
+            (SCRUBBER, InputKind::Pressed) => {
+                self.scrub = None;
+                self.scrub_contact = self
+                    .session
+                    .as_ref()
+                    .filter(|session| {
+                        self.control && session.can_seek && session.length_micros.is_some()
+                    })
+                    .map(|_| event.contact_id.unwrap_or(0));
+            }
+            (SCRUBBER, InputKind::ValueChanged)
+                if self.scrub_contact == Some(event.contact_id.unwrap_or(0)) =>
+            {
                 if let Some(value) = event.value.filter(|value| value.is_finite()) {
                     self.scrub = Some(value.clamp(0.0, 1.0));
                     update.rerender = true;
                 }
             }
             // Lifting the finger commits the scrub.
-            (SCRUBBER, InputKind::Activated) => {
+            (SCRUBBER, InputKind::Activated)
+                if self.scrub_contact == Some(event.contact_id.unwrap_or(0)) =>
+            {
                 self.seek();
+                self.scrub_contact = None;
                 update.rerender = true;
             }
-            (SCRUBBER, InputKind::Cancelled) => {
+            (SCRUBBER, InputKind::Cancelled | InputKind::Released) => {
                 self.scrub = None;
+                self.scrub_contact = None;
                 update.rerender = true;
             }
             _ => {}

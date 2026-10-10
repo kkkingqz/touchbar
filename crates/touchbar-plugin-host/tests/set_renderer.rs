@@ -541,6 +541,82 @@ fn panel_layout_has_its_own_bindings_and_cancels_primary_contact() {
 }
 
 #[test]
+fn columns_use_height_and_rows_use_width() {
+    let set = compile(
+        r#"
+version=1
+id="buttons"
+label="Column"
+[layout]
+kind="column"
+padding=6
+spacing=2
+[[layout.children]]
+kind="button"
+widget_id=10
+label="Heading"
+height=20
+width=200
+on_activate="select"
+[[layout.children]]
+kind="button"
+widget_id=11
+label="Tail"
+height=26
+width=200
+minimum=20
+maximum=36
+grow=1
+on_activate="select"
+"#,
+    );
+    let rendered = buttons(&set, &state(&[]));
+    assert_eq!(rendered.len(), 2);
+    assert_eq!(rendered[0].bounds.height, 20.0);
+    assert_eq!(rendered[1].bounds.height, 26.0);
+}
+
+#[test]
+fn nested_repeat_identity_includes_outer_keys() {
+    let set = compile(
+        r#"
+version=1
+id="buttons"
+label="Nested players"
+[layout]
+kind="repeat"
+repeat_from="players"
+repeat_key="id"
+[layout.template]
+kind="repeat"
+repeat_from="players"
+repeat_key="id"
+minimum=80
+[layout.template.template]
+kind="button"
+id="inner"
+label_from="record.title"
+on_activate="select"
+on_cancelled="cancel"
+"#,
+    );
+    let first = buttons(&set, &state(&["a", "b"]));
+    let ids = first
+        .iter()
+        .map(|node| node.id.unwrap().0)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(ids.len(), 4);
+    let second = buttons(&set, &state(&["b", "a"]));
+    assert_eq!(
+        second
+            .iter()
+            .map(|node| node.id.unwrap().0)
+            .collect::<std::collections::BTreeSet<_>>(),
+        ids
+    );
+}
+
+#[test]
 fn color_role_bindings_require_declared_text() {
     let document = SetDocument::from_toml(
         r#"

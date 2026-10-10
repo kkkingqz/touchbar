@@ -244,8 +244,8 @@ flatpak-spawn --host /usr/bin/bash -c \
 - [x] Выполнить focused acceptance до финальных tooling changes; отсутствующие подключения кампаний должны быть видны как failure, не skip.
 - [x] Обновить docs/tooling; объяснить, какие данные относятся к каждому слою, где общий код, как отдельно хранится состояние. Не описывать runtime как полностью реализованный до завершения задач 1–11. Обновлённые first-party Wasm коммитить только как намеренные артефакты миграции, не побочные результаты сборки unrelated examples.
 - [x] Выполнить `tb_cargo fmt --all -- --check`, `tb_cargo clippy --workspace --all-targets -- -D warnings`, `tb_cargo test --workspace`, doc tests/build checks. Затем полную host packaging campaign из раздела окружения (включает применимые security/acceptance). Ignored host-only tests запустить на host согласно существующему harness. Любой failure разобраться/исправить, не ослаблять assertions.
-- [ ] Провести обзор ветки с фокусом на grants/activation, sealed transport, independent Store, cancellation и обратную совместимость. Исправить найденные дефекты и повторить только затронутые проверки.
-- [ ] Коммит: `docs: document button set authoring and complete migration checks`; проверить diff/status, отсутствие изменений AUR/вложенного checkout. Сообщить коммиты, проверенные сценарии и реальные ограничения; push/установка не входят в задачу.
+- [x] Провести обзор ветки с фокусом на grants/activation, sealed transport, independent Store, cancellation и обратную совместимость. Исправить найденные дефекты и повторить только затронутые проверки.
+- [x] Коммит: `docs: document button set authoring and complete migration checks`; проверить diff/status, отсутствие изменений AUR/вложенного checkout. Сообщить коммиты, проверенные сценарии и реальные ограничения; push/установка не входят в задачу.
 
 ## Самопроверка плана и передача выполнения
 

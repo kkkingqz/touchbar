@@ -396,6 +396,7 @@ pub struct ComponentUpdate {
 pub enum ComponentPresentationEvent {
     Anchor { x: f32, width: f32 },
     Started,
+    StartedWithLifecycle(ComponentPresentationLifecycle),
     Ended(ComponentPresentationEndReason),
 }
 
@@ -1297,7 +1298,10 @@ impl PluginHost {
             ComponentPresentationEvent::Anchor { x, width } => {
                 wit::PresentationEvent::Anchor(wit::PresentationAnchor { x, width })
             }
-            ComponentPresentationEvent::Started => wit::PresentationEvent::Started,
+            ComponentPresentationEvent::Started
+            | ComponentPresentationEvent::StartedWithLifecycle(_) => {
+                wit::PresentationEvent::Started
+            }
             ComponentPresentationEvent::Ended(reason) => {
                 wit::PresentationEvent::Ended(match reason {
                     ComponentPresentationEndReason::Requested => {

@@ -115,6 +115,124 @@ fn late_input_after_restart_is_rejected() {
 }
 
 #[test]
+fn unchanged_hide_show_keeps_bindings_and_rejects_old_contact() {
+    let mut a = host("counter-a");
+    render(&mut a, "counter-a");
+    a.handle_event(&event("counter-a", InputKind::Pressed))
+        .unwrap();
+    assert!(!a.handle_visibility_changed("counter-a", false).unwrap());
+    assert!(!a.handle_visibility_changed("counter-a", true).unwrap());
+    // No state change and no resize means the application keeps its current UI.
+    a.handle_event(&event("counter-a", InputKind::Activated))
+        .unwrap();
+    let mut fresh = event("counter-a", InputKind::Pressed);
+    fresh.contact_id = Some(2);
+    a.handle_event(&fresh).unwrap();
+    fresh.kind = InputKind::Activated;
+    a.handle_event(&fresh).unwrap();
+    assert_eq!(a.snapshot().0["count"], StateValue::Number(1.0));
+}
+
+#[test]
+fn presentation_selects_custom_panel_then_restores_primary() {
+    use touchbar_plugin_host::{ComponentPresentationEndReason, ComponentPresentationEvent};
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../target/wasm32-wasip2/release/touchbar_button_set_logic_demo.wasm"
+    ))
+    .unwrap();
+    let set = SetDocument::from_toml(
+        r#"
+version=1
+id="counter"
+label="Counter"
+expanded_panel="details"
+[layout]
+kind="button"
+widget_id=10
+label="Primary"
+on_activate="increment"
+[[panels]]
+id="details"
+[panels.layout]
+kind="button"
+widget_id=90
+label="Details"
+on_activate="increment"
+"#,
+    )
+    .unwrap();
+    let mut a =
+        ButtonSetHost::from_bytes_with_broker(&bytes, set, HostLimits::default(), None).unwrap();
+    let bounds = Rect::new(0.0, 0.0, 160.0, 60.0);
+    render(&mut a, "counter");
+    assert!(
+        a.handle_presentation_event(ComponentPresentationEvent::Started)
+            .unwrap()
+            .rerender
+    );
+    let mut ui = a
+        .render_at("counter", bounds, Appearance::default(), Duration::ZERO)
+        .unwrap();
+    assert_eq!(
+        ui.resolve(bounds, touchbar_ui::Theme::default())
+            .inspector
+            .semantics
+            .id
+            .unwrap()
+            .0,
+        90
+    );
+    assert!(
+        a.handle_presentation_event(ComponentPresentationEvent::Ended(
+            ComponentPresentationEndReason::Requested
+        ))
+        .unwrap()
+        .rerender
+    );
+    let mut ui = a
+        .render_at("counter", bounds, Appearance::default(), Duration::ZERO)
+        .unwrap();
+    assert_eq!(
+        ui.resolve(bounds, touchbar_ui::Theme::default())
+            .inspector
+            .semantics
+            .id
+            .unwrap()
+            .0,
+        10
+    );
+}
+
+#[test]
+fn omarchy_configuration_can_be_reused_under_another_id() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/omarchy");
+    let bytes = std::fs::read(root.join("component/plugin.wasm")).unwrap();
+    let source = std::fs::read_to_string(root.join("sets/screensaver.toml")).unwrap();
+    let set = SetDocument::from_toml(
+        &source.replace("id = \"screensaver\"", "id = \"second-screensaver\""),
+    )
+    .unwrap();
+    let mut a =
+        ButtonSetHost::from_bytes_with_broker(&bytes, set, HostLimits::default(), None).unwrap();
+    a.render_at(
+        "second-screensaver",
+        Rect::new(0.0, 0.0, 2008.0, 60.0),
+        Appearance::default(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    let StateValue::List(mark) = &a.snapshot().0["mark"] else {
+        panic!()
+    };
+    assert_eq!(
+        mark.len(),
+        290,
+        "logic_config selects the same wordmark independently of set identity"
+    );
+}
+
+#[test]
 fn init_and_describe_cannot_request_effects_and_action_uses_real_activation() {
     use touchbar_plugin_host::{BrokerClient, InputActivation};
     use touchbar_protocol::broker_ipc::{

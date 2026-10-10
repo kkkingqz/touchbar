@@ -1,5 +1,5 @@
 //! Omarchy state and bounded drawing records. Effects and motion live in sets/.
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use touchbar_component_sdk::bindings::touchbar::plugin::ui::{MotionPolicy, Rgba, Theme};
 use touchbar_component_sdk::{HostEvent, PresentationEvent, RenderRequest};
@@ -8,7 +8,11 @@ use touchbar_set_config::{
     ActionDescription, InputKind, LogicDescription, ScalarType, StatePatch, StateType, StateValue,
 };
 struct Omarchy;
-thread_local! { static ANIMATED: Cell<bool> = const { Cell::new(true) }; static AWAKE: Cell<bool> = const { Cell::new(false) };  }
+thread_local! {
+    static ANIMATED: Cell<bool> = const { Cell::new(true) };
+    static AWAKE: Cell<bool> = const { Cell::new(false) };
+    static LOGIC_CONFIG: RefCell<String> = const { RefCell::new(String::new()) };
+}
 const MIN_ACCENT_LUMINANCE: f32 = 0.28;
 const MIN_FOREGROUND_LUMINANCE: f32 = 0.55;
 
@@ -425,7 +429,12 @@ impl Guest for Omarchy {
         );
         description_to_wit(&d)
     }
-    fn initialize(_item: String, _config: String) -> Result<wire::StatePatch, String> {
+    fn initialize(_item: String, config: String) -> Result<wire::StatePatch, String> {
+        if !matches!(config.as_str(), "screensaver" | "palette") {
+            return Err("unknown Omarchy configuration".into());
+        }
+        LOGIC_CONFIG.set(config);
+        AWAKE.set(false);
         let mut p = StatePatch::default();
         for name in ["ground", "mark", "hairline", "palette"] {
             p.0.insert(name.into(), StateValue::List(vec![]));
@@ -451,12 +460,14 @@ impl Guest for Omarchy {
         Ok(patch_to_wit(&p))
     }
     fn handle_context_changed(request: RenderRequest) -> Result<wire::LogicUpdate, String> {
-        let p = context(
-            &request.item_id,
-            request.viewport.width,
-            request.viewport.height,
-            &request.theme,
-        );
+        let p = LOGIC_CONFIG.with_borrow(|config| {
+            context(
+                config,
+                request.viewport.width,
+                request.viewport.height,
+                &request.theme,
+            )
+        });
 
         Ok(wire::LogicUpdate {
             state: p,

@@ -42,8 +42,7 @@ fn state(track: &str) -> MediaState {
         }),
     }
 }
-#[test]
-fn track_change_cancel_seek_and_visibility_cleanup_use_real_logic() {
+fn timeline_host() -> (ButtonSetHost, Seqpacket) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../plugins/media")
         .canonicalize()
@@ -107,6 +106,11 @@ fn track_change_cancel_seek_and_visibility_cleanup_use_real_logic() {
         })
         .unwrap();
     host.dispatch_broker_events().unwrap();
+    (host, server)
+}
+#[test]
+fn track_change_cancel_seek_and_visibility_cleanup_use_real_logic() {
+    let (mut host, server) = timeline_host();
     let viewport = Rect::new(0.0, 0.0, 1000.0, 60.0);
     host.render_at("timeline", viewport, Appearance::default(), Duration::ZERO)
         .unwrap();
@@ -148,6 +152,13 @@ fn track_change_cancel_seek_and_visibility_cleanup_use_real_logic() {
         })
         .unwrap();
     host.dispatch_broker_events().unwrap();
+    host.handle_event(&input(InputKind::ValueChanged, Some(0.8)))
+        .unwrap();
+    assert_eq!(
+        host.snapshot().0["position_micros"],
+        StateValue::Number(10_000_000.0),
+        "old contact must stay cancelled after replacement motion"
+    );
     host.handle_event(&input(InputKind::Activated, None))
         .unwrap();
     assert!(
@@ -201,4 +212,97 @@ fn track_change_cancel_seek_and_visibility_cleanup_use_real_logic() {
         HostMessage::Cancel { .. }
     ));
     assert!(!ready(&server));
+}
+
+#[test]
+fn timeline_seek_is_reachable_at_native_bar_height() {
+    let (mut host, _server) = timeline_host();
+    let bounds = Rect::new(0.0, 0.0, 1000.0, 60.0);
+    let mut ui = host
+        .render_at("timeline", bounds, Appearance::default(), Duration::ZERO)
+        .unwrap();
+    let resolved = ui.resolve(bounds, touchbar_ui::Theme::default());
+    let target = resolved
+        .interactions
+        .target(touchbar_ui::WidgetId(30))
+        .expect("timeline seek target must fit in the physical bar");
+    let mut interactions = touchbar_ui::InteractionState::default();
+    let events = interactions.handle(
+        &resolved.interactions,
+        touchbar_ui::Contact {
+            id: 8,
+            phase: touchbar_ui::ContactPhase::Down,
+            position: touchbar_ui::Point::new(
+                target.bounds.x + target.bounds.width / 2.0,
+                target.bounds.y + target.bounds.height / 2.0,
+            ),
+            time: Duration::ZERO,
+        },
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event,touchbar_ui::UiEvent::Pressed{id} if id.0==30))
+    );
+}
+#[test]
+fn cancellation_patch_is_reflected_in_the_returned_ui() {
+    let (mut host, server) = timeline_host();
+    let bounds = Rect::new(0.0, 0.0, 1000.0, 60.0);
+    host.render_at("timeline", bounds, Appearance::default(), Duration::ZERO)
+        .unwrap();
+    let mut input = InputEvent {
+        item_id: "timeline".into(),
+        widget_id: 30,
+        kind: InputKind::Pressed,
+        value: None,
+        contact_id: Some(1),
+        activation: None,
+    };
+    host.handle_event(&input).unwrap();
+    input.kind = InputKind::ValueChanged;
+    input.value = Some(0.5);
+    host.handle_event(&input).unwrap();
+    assert_eq!(
+        host.snapshot().0["position_micros"],
+        StateValue::Number(100_000_000.0)
+    );
+    server
+        .send_supervisor(&SupervisorMessage::CapabilityChanged {
+            generation: 2,
+            state: CapabilityState {
+                capability: "media.control.v1".into(),
+                required: false,
+                status: WireCapabilityStatus::Denied,
+            },
+        })
+        .unwrap();
+    host.dispatch_broker_events().unwrap();
+    let mut ui = host
+        .render_at("timeline", bounds, Appearance::default(), Duration::ZERO)
+        .unwrap();
+    assert_eq!(
+        host.snapshot().0["position_micros"],
+        StateValue::Number(10_000_000.0)
+    );
+    fn labels(node: &touchbar_ui::SemanticNode, result: &mut Vec<String>) {
+        if node.role == touchbar_ui::SemanticRole::Label {
+            result.push(node.label.clone());
+        }
+        for child in &node.children {
+            labels(child, result);
+        }
+    }
+    let mut rendered = vec![];
+    labels(
+        &ui.resolve(bounds, touchbar_ui::Theme::default())
+            .inspector
+            .semantics,
+        &mut rendered,
+    );
+    assert!(
+        rendered.contains(&"0:10".into()),
+        "cancellation must render the authoritative position: {rendered:?}"
+    );
+    assert!(!rendered.contains(&"1:40".into()));
 }

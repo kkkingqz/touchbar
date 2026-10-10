@@ -177,7 +177,7 @@ impl CompiledSet {
         self.routing.borrow_mut().drain_cancelled()
     }
     pub fn cancel_contacts(&self) -> Result<()> {
-        self.routing.borrow_mut().replace(BTreeMap::new())
+        self.routing.borrow_mut().cancel_contacts()
     }
 }
 
@@ -185,6 +185,7 @@ impl CompiledSet {
 struct Record<'a> {
     record: &'a StateRecord,
     key: &'a str,
+    identity: &'a str,
 }
 
 struct Builder<'a> {
@@ -313,7 +314,7 @@ impl Builder<'_> {
             stable_id(
                 &self.set.document.id,
                 node.id.as_deref().unwrap_or(path),
-                record.map_or("", |record| record.key),
+                record.map_or("", |record| record.identity),
             )
         });
         let enabled = self.boolean(&node.enabled_from, true, record)?;
@@ -340,7 +341,10 @@ impl Builder<'_> {
                 for (index, child) in node.children.iter().enumerate() {
                     let rendered =
                         self.node(child, &format!("{path}/{index}"), record, depth + 1)?;
-                    children.push(FlexItem::new(flex(child), rendered));
+                    children.push(FlexItem::new(
+                        flex(child, node.kind == LayoutKind::Column),
+                        rendered,
+                    ));
                 }
                 match node.kind {
                     LayoutKind::Row => Node::row(node.spacing, node.padding, children),
@@ -364,16 +368,31 @@ impl Builder<'_> {
                         bail!("repeat record lacks key");
                     };
                     let current = StateRecord(fields.clone());
+                    // Inner keys are local to their outer record. Keep the full
+                    // ancestry in routing identity even with an explicit node ID.
+                    let identity = record.map_or_else(
+                        || key.clone(),
+                        |parent| {
+                            format!(
+                                "{}:{}{}:{}",
+                                parent.identity.len(),
+                                parent.identity,
+                                key.len(),
+                                key
+                            )
+                        },
+                    );
                     let rendered = self.node(
                         template,
                         &format!("{path}/template"),
                         Some(Record {
                             record: &current,
                             key,
+                            identity: &identity,
                         }),
                         depth + 1,
                     )?;
-                    children.push(FlexItem::new(flex(template), rendered));
+                    children.push(FlexItem::new(flex(template, false), rendered));
                 }
                 Node::row(node.spacing, node.padding, children)
             }
@@ -779,14 +798,14 @@ impl Builder<'_> {
     }
 }
 
-fn flex(node: &LayoutNode) -> Flex {
-    if let Some(width) = node.width {
+fn flex(node: &LayoutNode, vertical: bool) -> Flex {
+    if let Some(size) = if vertical { node.height } else { node.width } {
         if node.minimum.is_none() && node.maximum.is_none() && node.grow.is_none() {
-            return Flex::fixed(width);
+            return Flex::fixed(size);
         }
         return Flex::flexible(
             node.minimum.unwrap_or(0.0),
-            width,
+            size,
             node.maximum.unwrap_or(8192.0),
         )
         .grow(node.grow.unwrap_or(1.0));

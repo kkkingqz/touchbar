@@ -7,7 +7,7 @@ use touchbar_set_config::{ActionEvent, InputKind, ScalarValue};
 
 use crate::{InputEvent, InputKind as HostKind};
 
-const MAX_CONTACTS: usize = 32;
+pub(super) const MAX_CONTACTS: usize = 32;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct BoundWidget {
@@ -54,6 +54,21 @@ impl Routing {
             .filter(|(_, (id, target))| widgets.get(id) != Some(target))
             .map(|(contact, (_, target))| (*contact, target.clone()))
             .collect();
+        self.cancel(removed)?;
+        self.widgets = widgets;
+        Ok(())
+    }
+
+    pub fn cancel_contacts(&mut self) -> Result<()> {
+        let removed = self
+            .contacts
+            .iter()
+            .map(|(contact, (_, target))| (*contact, target.clone()))
+            .collect();
+        self.cancel(removed)
+    }
+
+    fn cancel(&mut self, removed: Vec<(u32, BoundWidget)>) -> Result<()> {
         if self.pending_cancelled.len() + removed.len() > MAX_CONTACTS {
             bail!("undelivered cancellation budget exceeded");
         }
@@ -68,7 +83,6 @@ impl Routing {
         while self.cancelled_contacts.len() > MAX_CONTACTS * 8 {
             self.cancelled_contacts.pop_first();
         }
-        self.widgets = widgets;
         Ok(())
     }
 

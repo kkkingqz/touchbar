@@ -686,6 +686,13 @@ impl<A: Application + 'static> Runtime<A> {
         Ok(())
     }
 
+    fn presentation_session_changed(&mut self, event: PresentationSessionEvent) -> Result<()> {
+        self.application.presentation_session_changed(event)?;
+        // A selected panel can change without a configure/size change.
+        self.redraw_pending = true;
+        Ok(())
+    }
+
     fn fail(&mut self, error: anyhow::Error) {
         self.error = Some(error);
         self.running = false;
@@ -1119,15 +1126,15 @@ impl<A: Application + 'static> Dispatch<touchbar_surface_v1::TouchbarSurfaceV1, 
                 x,
                 width,
             } => {
-                if let Err(error) = state.application.presentation_session_changed(
-                    PresentationSessionEvent::Anchor {
+                if let Err(error) =
+                    state.presentation_session_changed(PresentationSessionEvent::Anchor {
                         session_id,
                         anchor: PopoverAnchor {
                             x: x as f32,
                             width: width as f32,
                         },
-                    },
-                ) {
+                    })
+                {
                     state.fail(error);
                 }
             }
@@ -1148,23 +1155,32 @@ impl<A: Application + 'static> Dispatch<touchbar_surface_v1::TouchbarSurfaceV1, 
                             },
                         )
                     });
-                match result.and_then(|event| state.application.presentation_session_changed(event))
-                {
+                match result.and_then(|event| state.presentation_session_changed(event)) {
                     Ok(()) => {}
                     Err(error) => state.fail(error),
                 }
             }
             touchbar_surface_v1::Event::PresentationEnded { session_id, reason } => {
                 let result = decode_dismiss_reason(reason.into_result()).and_then(|reason| {
-                    state.application.presentation_session_changed(
-                        PresentationSessionEvent::Ended { session_id, reason },
-                    )
+                    state.presentation_session_changed(PresentationSessionEvent::Ended {
+                        session_id,
+                        reason,
+                    })
                 });
                 if let Err(error) = result {
                     state.fail(error);
                 }
             }
             _ => {}
+        }
+        if state.running
+            && state.redraw_pending
+            && state.visible
+            && !state.frame_pending
+            && state.graphics.is_some()
+            && let Err(error) = state.render_and_commit(qh)
+        {
+            state.fail(error);
         }
     }
 }
@@ -1286,4 +1302,42 @@ pub fn run<A: Application + 'static>(options: ClientOptions, application: A) -> 
         frames: runtime.frames,
         renderer_name,
     })
+}
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+    struct Probe;
+    impl Application for Probe {
+        fn render(&mut self, _graphics: &Graphics, _frame: FrameInfo) -> Result<FrameFlow> {
+            panic!("no graphics needed")
+        }
+    }
+    #[test]
+    fn presentation_events_wake_static_frames_without_resize() {
+        let mut runtime = Runtime::new(ClientOptions::new("probe"), Probe);
+        assert!(!runtime.redraw_pending);
+        runtime
+            .presentation_session_changed(PresentationSessionEvent::Started {
+                session_id: 1,
+                policy: SessionPresentationPolicy::Anchored,
+                lifecycle: SessionPresentationLifecycle::Persistent,
+            })
+            .unwrap();
+        assert!(
+            runtime.redraw_pending,
+            "custom panel must be drawn even when geometry is unchanged"
+        );
+        runtime.redraw_pending = false;
+        runtime
+            .presentation_session_changed(PresentationSessionEvent::Ended {
+                session_id: 1,
+                reason: PresentationDismissReason::Requested,
+            })
+            .unwrap();
+        assert!(
+            runtime.redraw_pending,
+            "returning to the primary layout also needs a frame"
+        );
+    }
 }

@@ -85,9 +85,10 @@ broker; supervisor resource handles are released independently of other sets.
 
 Layouts support rows, columns, stacks, buttons, text, symbols, packaged images,
 sliders, meters, progress, scrubbers, keyed repeats, bounded canvas records,
-responsive variants, validated shader effects and host-timed motion. A `width`
-alone is fixed. With `minimum`, `maximum` or `grow`, it is the flex basis and may
-shrink or grow within those constraints. State bindings use the `_from` fields;
+responsive variants, validated shader effects and host-timed motion. Rows size
+children by `width`, columns by `height`. That dimension alone is fixed; with
+`minimum`, `maximum` or `grow`, it is the flex basis and may shrink or grow within
+those constraints. State bindings use the `_from` fields;
 `enabled_from` removes interaction when false and `visible_from` hides content.
 Semantic color bindings must resolve to a known theme role.
 

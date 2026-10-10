@@ -65,6 +65,7 @@ struct Plugin;
 
 thread_local! {
     static ITEM: RefCell<String> = const { RefCell::new(String::new()) };
+    static LOGIC_CONFIG: RefCell<String> = const { RefCell::new(String::new()) };
     static CONTROLS: RefCell<Controls> = RefCell::new(Controls::default());
 }
 
@@ -387,6 +388,7 @@ impl Guest for Plugin {
         CONTROLS.set(Controls::default());
         CONTROLS.with_borrow_mut(|controls| {
             controls.want(&config);
+            LOGIC_CONFIG.set(config);
             Ok(patch(controls))
         })
     }
@@ -432,9 +434,9 @@ impl Guest for Plugin {
         CONTROLS.with_borrow_mut(|controls| {
             controls.visible = visible;
             if visible {
-                ITEM.with_borrow(|item| {
-                    controls.want(item);
-                    controls.shown(item);
+                LOGIC_CONFIG.with_borrow(|config| {
+                    controls.want(config);
+                    controls.shown(config);
                 });
                 controls.pump();
             } else {
@@ -939,6 +941,14 @@ mod tests {
     use touchbar_component_sdk::CommandOpened;
 
     use super::*;
+    #[test]
+    fn reused_configuration_restarts_watch_after_hide_show() {
+        Plugin::initialize("compact-volume".into(), "volume".into()).unwrap();
+        Plugin::handle_visibility_changed(false).unwrap();
+        CONTROLS.with_borrow(|controls| assert!(!controls.wanted[Watch::Audio.index()]));
+        Plugin::handle_visibility_changed(true).unwrap();
+        CONTROLS.with_borrow(|controls| assert!(controls.wanted[Watch::Audio.index()]));
+    }
 
     #[test]
     fn levels_are_read_from_the_tools_output() {
