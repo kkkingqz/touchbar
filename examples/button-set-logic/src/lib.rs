@@ -11,7 +11,10 @@ use touchbar_set_config::{
 
 struct Counter;
 
-thread_local! { static COUNT: Cell<f64> = const { Cell::new(0.0) }; }
+thread_local! {
+    static COUNT: Cell<f64> = const { Cell::new(0.0) };
+    static PROBE_ACTION: Cell<bool> = const { Cell::new(false) };
+}
 
 fn patch() -> wire::StatePatch {
     patch_to_wit(&StatePatch(BTreeMap::from([(
@@ -29,6 +32,14 @@ fn unchanged() -> wire::LogicUpdate {
 
 impl Guest for Counter {
     fn describe() -> wire::LogicDescription {
+        #[cfg(target_arch = "wasm32")]
+        {
+            use touchbar_component_sdk::bindings::touchbar::plugin::broker;
+            assert_eq!(
+                broker::request("context.read.v1", "read", &[]),
+                Err(broker::ErrorCode::InvalidPhase)
+            );
+        }
         description_to_wit(&LogicDescription {
             actions: BTreeMap::from([(
                 "increment".into(),
@@ -42,9 +53,24 @@ impl Guest for Counter {
     }
 
     fn initialize(item_id: String, logic_config: String) -> Result<wire::StatePatch, String> {
-        if item_id.is_empty() || !matches!(logic_config.as_str(), "" | "counter") {
+        if item_id.is_empty()
+            || !matches!(
+                logic_config.as_str(),
+                "" | "counter" | "probe-effects" | "probe-action"
+            )
+        {
             return Err("invalid counter configuration".into());
         }
+        #[cfg(target_arch = "wasm32")]
+        if logic_config == "probe-effects" {
+            use touchbar_component_sdk::bindings::touchbar::plugin::broker;
+            if broker::request("context.read.v1", "read", &[])
+                != Err(broker::ErrorCode::InvalidPhase)
+            {
+                return Err("initialize allowed an effect".into());
+            }
+        }
+        PROBE_ACTION.set(logic_config == "probe-action");
         COUNT.set(0.0);
         Ok(patch())
     }
@@ -54,6 +80,12 @@ impl Guest for Counter {
             return Err("unexpected counter action".into());
         }
         COUNT.set(COUNT.get() + 1.0);
+        if PROBE_ACTION.get() {
+            touchbar_logic_sdk::engine::ENGINE
+                .keyboard()
+                .shortcut("probe")
+                .map_err(|error| format!("{error:?}"))?;
+        }
         Ok(wire::LogicUpdate {
             state: patch(),
             presentation: None,

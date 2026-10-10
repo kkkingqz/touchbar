@@ -20,7 +20,7 @@ use touchbar_plugin_host::{
     ComponentPresentationEndReason, ComponentPresentationEvent, ComponentPresentationLifecycle,
     ComponentPresentationPlacement, ComponentUpdate, HostLimits, HostedItem, InputActivation,
     InputEvent, InputKind, MANIFEST_FD_ENV, MAX_INHERITED_ASSET_BUNDLE_BYTES,
-    MAX_INHERITED_COMPONENT_BYTES, MAX_INHERITED_MANIFEST_BYTES, PackageAssets, PluginHost,
+    MAX_INHERITED_COMPONENT_BYTES, MAX_INHERITED_MANIFEST_BYTES, PackageAssets, PluginRuntime,
     apply_component_confinement, read_supervisor_file,
 };
 use touchbar_protocol::broker_ipc::ActivationOrigin;
@@ -41,7 +41,7 @@ struct OpenedPackage {
     component: PathBuf,
     world: String,
     limits: HostLimits,
-    host: PluginHost,
+    host: PluginRuntime,
     items: Vec<HostedItem>,
     replay_broker: Option<replay::ReplayBrokerController>,
 }
@@ -342,7 +342,7 @@ fn open_package(
                     bail!("touchbar-plugin-host requires a component package")
                 }
             };
-            let mut host = PluginHost::from_bytes_with_broker(&component, limits, broker)?;
+            let mut host = PluginRuntime::from_bytes_with_broker(&component, limits, broker)?;
             host.set_assets(assets);
             (manifest, display, host, None)
         }
@@ -378,7 +378,7 @@ fn open_package(
                 .map_or((None, None), |(broker, controller)| {
                     (Some(broker), Some(controller))
                 });
-            let mut host = PluginHost::from_file_with_broker(&component, limits, broker)?;
+            let mut host = PluginRuntime::from_file_with_broker(&component, limits, broker)?;
             host.set_assets(assets);
             (manifest, component, host, replay_broker)
         }
@@ -573,7 +573,7 @@ fn manifest_presentation_sizing(manifest: &PluginManifest, item: &str) -> Option
 }
 
 struct ComponentApplication {
-    host: PluginHost,
+    host: PluginRuntime,
     item: String,
     renderer: Option<gles::Renderer>,
     ui: Option<RetainedUi>,

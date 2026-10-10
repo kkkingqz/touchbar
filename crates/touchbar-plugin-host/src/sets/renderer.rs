@@ -168,6 +168,9 @@ impl CompiledSet {
     pub fn drain_cancelled(&self) -> Vec<ActionEvent> {
         self.routing.borrow_mut().drain_cancelled()
     }
+    pub fn cancel_contacts(&self) -> Result<()> {
+        self.routing.borrow_mut().replace(BTreeMap::new())
+    }
 }
 
 #[derive(Clone, Copy)]

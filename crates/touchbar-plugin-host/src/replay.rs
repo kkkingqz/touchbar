@@ -28,7 +28,7 @@ use touchbar_plugin_host::{
     Appearance, BrokerClient, ColorScheme, ComponentPresentationCommand,
     ComponentPresentationDismissal, ComponentPresentationEndReason, ComponentPresentationEvent,
     ComponentPresentationLifecycle, ComponentPresentationPlacement, HostedItem, InputActivation,
-    InputEvent, InputKind, PluginHost,
+    InputEvent, InputKind,
 };
 use touchbar_plugin_supervisor::{
     ActivationLedger, Backend, BackendRequest, CLIPBOARD_READ_OPERATION, CLIPBOARD_WRITE_OPERATION,
@@ -924,7 +924,7 @@ struct SemanticReport {
 }
 
 struct Harness {
-    host: PluginHost,
+    host: crate::PluginRuntime,
     item: String,
     width: u32,
     viewport: Rect,
@@ -5484,12 +5484,13 @@ fn context_value(value: &ContextFixtureValue) -> ContextFactValue {
 }
 
 pub fn run(
-    host: PluginHost,
+    host: impl Into<crate::PluginRuntime>,
     items: &[HostedItem],
     scenario: Scenario,
     broker: Option<ReplayBrokerController>,
     screenshot_directory: Option<&Path>,
 ) -> Result<()> {
+    let host = host.into();
     validate_scenario(&scenario, items)?;
     let screenshot_directory = screenshot_directory
         .map(|directory| {

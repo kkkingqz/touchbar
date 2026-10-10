@@ -57,7 +57,9 @@ pub mod bindings {
     });
 }
 
+pub mod runtime;
 pub mod sets;
+pub use runtime::PluginRuntime;
 
 pub mod appearance_provider_bindings {
     wasmtime::component::bindgen!({
@@ -218,7 +220,7 @@ impl wit_broker::Host for HostState {
     fn cancel(&mut self, request_id: u64) -> std::result::Result<(), wit_broker::ErrorCode> {
         if !matches!(
             self.phase,
-            Some(CallbackPhase::Input | CallbackPhase::HostEvent)
+            Some(CallbackPhase::Input | CallbackPhase::HostEvent | CallbackPhase::Lifecycle)
         ) {
             return Err(wit_broker::ErrorCode::InvalidPhase);
         }
@@ -233,7 +235,7 @@ impl wit_broker::Host for HostState {
     fn close(&mut self, resource_id: u64) -> std::result::Result<(), wit_broker::ErrorCode> {
         if !matches!(
             self.phase,
-            Some(CallbackPhase::Input | CallbackPhase::HostEvent)
+            Some(CallbackPhase::Input | CallbackPhase::HostEvent | CallbackPhase::Lifecycle)
         ) {
             return Err(wit_broker::ErrorCode::InvalidPhase);
         }
@@ -3929,6 +3931,20 @@ mod tests {
                 "read".into(),
                 Vec::new(),
             ),
+            Err(wit_broker::ErrorCode::Unavailable)
+        );
+    }
+
+    #[test]
+    fn lifecycle_can_release_own_resources() {
+        let (_, mut store) = create_store(HostLimits::default(), None).unwrap();
+        store.data_mut().phase = Some(CallbackPhase::Lifecycle);
+        assert_eq!(
+            wit_broker::Host::cancel(store.data_mut(), 1),
+            Err(wit_broker::ErrorCode::Unavailable)
+        );
+        assert_eq!(
+            wit_broker::Host::close(store.data_mut(), 1),
             Err(wit_broker::ErrorCode::Unavailable)
         );
     }

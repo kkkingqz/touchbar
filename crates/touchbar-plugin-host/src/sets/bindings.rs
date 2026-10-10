@@ -103,6 +103,10 @@ impl Routing {
                     self.cancelled_contacts.remove(&contact);
                 }
                 return Ok(None);
+            } else if !self.contacts.contains_key(&contact) {
+                // Only a Down captured by this instance may continue a touch.
+                // A restarted Store must never accept the previous Store's Up.
+                return Ok(None);
             }
             if let Some((id, _)) = self.contacts.get(&contact)
                 && *id != event.widget_id
@@ -115,10 +119,8 @@ impl Routing {
             .and_then(|contact| self.contacts.get(&contact).map(|(_, target)| target))
             .or_else(|| self.widgets.get(&event.widget_id));
         let result = target.and_then(|target| target.event(kind, event.value, event.contact_id));
-        if matches!(
-            kind,
-            InputKind::Activated | InputKind::Released | InputKind::Cancelled
-        ) && let Some(contact) = event.contact_id
+        if matches!(kind, InputKind::Released | InputKind::Cancelled)
+            && let Some(contact) = event.contact_id
         {
             self.contacts.remove(&contact);
         }

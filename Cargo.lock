@@ -3310,6 +3310,7 @@ version = "0.1.0"
 name = "touchbar-button-set-logic-demo"
 version = "0.1.0"
 dependencies = [
+ "touchbar-component-sdk",
  "touchbar-logic-sdk",
  "touchbar-set-config",
 ]

@@ -116,7 +116,7 @@ flatpak-spawn --host /usr/bin/bash -c \
 
 **Interfaces:** `ButtonSetHost::from_bytes_with_broker(component: &[u8], set: SetDocument, limits: HostLimits, broker: Option<BrokerClient>) -> anyhow::Result<Self>`. `PluginRuntime::{Legacy(PluginHost),ButtonSet(ButtonSetHost)}` делегирует прежние `items`, `render`, `render_at`, `handle_event`, presentation/visibility handlers, broker pumping, assets и animation metrics; у CLI/live/replay один runtime enum.
 
-- [ ] Написать `same_component_separate_stores`, `init_and_describe_cannot_request_effects`, `action_uses_real_activation`, `revocation_during_drag_blocks_write`, `late_input_after_restart_is_rejected`, `visibility_closes_own_resources`. Assert increment A оставляет B.count=0; broker requests в init/describe запрещены; resource IDs/activation не принадлежат другому Store или generation.
+- [x] Написать `same_component_separate_stores`, `init_and_describe_cannot_request_effects`, `action_uses_real_activation`, `revocation_during_drag_blocks_write`, `late_input_after_restart_is_rejected`, `visibility_closes_own_resources`. Assert increment A оставляет B.count=0; broker requests в init/describe запрещены; resource IDs/activation не принадлежат другому Store или generation.
 
   ```rust
   assert_eq!(count_a_after_activation, 1);
@@ -124,10 +124,10 @@ flatpak-spawn --host /usr/bin/bash -c \
   assert_eq!(accepted_effects_during_initialize, 0);
   assert_eq!(accepted_effects_after_revocation, 0);
   ```
-- [ ] Выполнить `tb_cargo test -p touchbar-plugin-host --test set_runtime`; ожидать failure до поддержки нового world.
-- [ ] Реализовать отдельные Store/HostState на набор; describe/initialize используют фазу без effects, lifecycle и host events — прежние разрешённые фазы. Context callback вызывается при изменении viewport/theme в фазе Render без effects и без presentation commands; затем renderer строит UI из состояния. Применять patch атомарно и проверять presentation ownership. Применять activation_for_input, refuel и resource cleanup так же, как Legacy. Никаких фиктивных contacts или activation из layout. Старый PluginHost API остаётся для существующих тестов.
-- [ ] Выполнить runtime, broker и legacy host tests; headless/replay пример `increment` показывает count=1 только после action. Пока production loader нового runtime не включать.
-- [ ] Коммит: `feat: host isolated button set logic instances`.
+- [x] Выполнить `tb_cargo test -p touchbar-plugin-host --test set_runtime`; ожидать failure до поддержки нового world.
+- [x] Реализовать отдельные Store/HostState на набор; describe/initialize используют фазу без effects, lifecycle и host events — прежние разрешённые фазы. Context callback вызывается при изменении viewport/theme в фазе Render без effects и без presentation commands; затем renderer строит UI из состояния. Применять patch атомарно и проверять presentation ownership. Применять activation_for_input, refuel и resource cleanup так же, как Legacy. Никаких фиктивных contacts или activation из layout. Старый PluginHost API остаётся для существующих тестов.
+- [x] Выполнить runtime, broker и legacy host tests; headless/replay пример `increment` показывает count=1 только после action. Пока production loader нового runtime не включать.
+- [x] Коммит: `feat: host isolated button set logic instances`.
 
 ### Task 5: Каталог наборов в package/store и CLI
 
