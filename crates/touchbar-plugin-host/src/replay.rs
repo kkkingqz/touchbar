@@ -1169,6 +1169,9 @@ struct ContextSubscription {
 }
 
 impl Scenario {
+    pub fn item(&self) -> &str {
+        &self.item
+    }
     pub fn load(path: &Path) -> Result<Self> {
         let bytes = read_scenario(path)?;
         serde_json::from_slice(&bytes).context("parse replay scenario")

@@ -158,7 +158,8 @@ fn run() -> Result<u8> {
                 .entrypoint
         }
         None => match &manifest.runtime {
-            RuntimeSpec::Component { entrypoint, .. } => entrypoint,
+            RuntimeSpec::Component { entrypoint, .. }
+            | RuntimeSpec::ButtonSetLogic { entrypoint, .. } => entrypoint,
             RuntimeSpec::Native { .. } => {
                 bail!("the component supervisor cannot launch a native package")
             }

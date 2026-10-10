@@ -3533,10 +3533,13 @@ dependencies = [
 name = "touchbar-package"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "libc",
  "semver",
  "serde",
  "toml",
  "touchbar-layout",
+ "touchbar-set-config",
 ]
 
 [[package]]

@@ -286,14 +286,14 @@ impl PackagedProfileCatalog {
         enabled_items: &BTreeSet<String>,
         enabled_profiles: &BTreeSet<String>,
     ) {
-        self.manages_default_visibility |= !manifest.profiles.is_empty()
+        self.manages_default_visibility |= !manifest.catalog_profiles().is_empty()
             || manifest
-                .items
+                .catalog_items()
                 .iter()
                 .any(|item| enabled_items.contains(&item.id) && !item.show_in_default_profile);
         self.enabled_items.extend(
             manifest
-                .items
+                .catalog_items()
                 .iter()
                 .filter(|item| item.show_in_default_profile && enabled_items.contains(&item.id))
                 .map(|item| ProfileItemConfig {
@@ -304,7 +304,7 @@ impl PackagedProfileCatalog {
         );
         self.profiles.extend(
             manifest
-                .profiles
+                .catalog_profiles()
                 .iter()
                 .filter(|profile| {
                     enabled_profiles.contains(&profile.id)
@@ -529,7 +529,7 @@ impl PresentationCatalog {
         enabled: &BTreeSet<String>,
     ) -> Result<()> {
         let source = manifest.plugin.source.to_string();
-        for item in &manifest.items {
+        for item in manifest.catalog_items() {
             if !enabled.contains(&item.id) {
                 continue;
             }
@@ -549,7 +549,7 @@ impl PresentationCatalog {
                 },
             );
         }
-        for bar in &manifest.bars {
+        for bar in manifest.catalog_bars() {
             let key = (source.clone(), bar.id.clone());
             if self.bars.insert(key, bar.clone()).is_some() {
                 bail!("duplicate installed presentation bar {}:{}", source, bar.id);

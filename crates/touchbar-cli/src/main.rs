@@ -245,7 +245,9 @@ fn build_component(root: &Path) -> Result<()> {
     if !status.success() {
         bail!("component build failed")
     }
-    let RuntimeSpec::Component { entrypoint, .. } = &manifest.runtime else {
+    let (RuntimeSpec::Component { entrypoint, .. }
+    | RuntimeSpec::ButtonSetLogic { entrypoint, .. }) = &manifest.runtime
+    else {
         bail!("native plugins own their build process")
     };
     let cargo: toml::Value = toml::from_str(&fs::read_to_string(&cargo_path)?)?;
@@ -322,6 +324,15 @@ fn build_component(root: &Path) -> Result<()> {
         println!("Built {}", target.display());
     }
     let package = inspect_package(root)?;
+    if matches!(package.manifest.runtime, RuntimeSpec::ButtonSetLogic { .. }) {
+        let host = binary(
+            &[],
+            "--host",
+            "TOUCHBAR_PLUGIN_HOST",
+            "touchbar-plugin-host",
+        )?;
+        test_component_package(root, &package, &host)?;
+    }
     println!("Built {}\n{}", target.display(), package.package_digest);
     Ok(())
 }
@@ -451,15 +462,25 @@ fn context(args: &[String]) -> Result<()> {
 }
 
 fn check(args: &[String]) -> Result<()> {
-    reject(args, &["--package", "--format"], 0)?;
-    let package = inspect_package(&package_root(args)?)?;
+    reject(args, &["--package", "--format", "--host"], 0)?;
+    let root = package_root(args)?;
+    let package = inspect_package(&root)?;
+    if matches!(package.manifest.runtime, RuntimeSpec::ButtonSetLogic { .. }) {
+        let host = binary(
+            args,
+            "--host",
+            "TOUCHBAR_PLUGIN_HOST",
+            "touchbar-plugin-host",
+        )?;
+        test_component_package(&root, &package, &host)?;
+    }
     match output_format(args)? {
         Format::Json => println!(
             "{}",
             serde_json::to_string_pretty(&json!({
                 "ok": true, "source": package.manifest.plugin.source, "version": package.manifest.plugin.version,
-                "runtime": if matches!(&package.manifest.runtime, RuntimeSpec::Component { .. }) { "component" } else { "native" },
-                "items": package.manifest.items, "profiles": package.manifest.profiles,
+                "runtime": if matches!(&package.manifest.runtime, RuntimeSpec::Component { .. } | RuntimeSpec::ButtonSetLogic { .. }) { "component" } else { "native" },
+                "items": package.manifest.catalog_items(), "profiles": package.manifest.catalog_profiles(),
                 "appearance_providers": package.manifest.appearance_providers,
                 "permissions": package.requests,
                 "package_digest": package.package_digest, "artifacts": package.artifacts
@@ -472,8 +493,8 @@ fn check(args: &[String]) -> Result<()> {
             );
             println!(
                 "    {} item(s), {} automatic profile(s), {} appearance provider(s), {} permission request(s)",
-                package.manifest.items.len(),
-                package.manifest.profiles.len(),
+                package.manifest.catalog_items().len(),
+                package.manifest.catalog_profiles().len(),
                 package.manifest.appearance_providers.len(),
                 package.requests.len()
             );
@@ -502,7 +523,7 @@ fn test(args: &[String]) -> Result<()> {
         plugin_version: package.manifest.plugin.version.to_string(),
         runtime: "component",
         items,
-        presentation_bars: &package.manifest.bars,
+        presentation_bars: package.manifest.catalog_bars(),
         render_cases,
     };
     match output_format(args)? {
@@ -554,12 +575,15 @@ fn test_component_package(
     package: &touchbar_plugin_store::PackageInspection,
     host: &Path,
 ) -> Result<Vec<TestedItem>> {
-    if !matches!(&package.manifest.runtime, RuntimeSpec::Component { .. }) {
+    if !matches!(
+        &package.manifest.runtime,
+        RuntimeSpec::Component { .. } | RuntimeSpec::ButtonSetLogic { .. }
+    ) {
         bail!("native plugin tests are package-owned")
     }
     let widths = component_test_matrix(&package.manifest);
-    let mut tested = Vec::with_capacity(package.manifest.items.len());
-    for item in &package.manifest.items {
+    let mut tested = Vec::with_capacity(package.manifest.catalog_items().len());
+    for item in package.manifest.catalog_items() {
         let item_widths = &widths[item.id.as_str()];
         for width in item_widths {
             let status = Command::new(host)
@@ -587,7 +611,7 @@ fn test_component_package(
 
 fn component_test_matrix(manifest: &PluginManifest) -> BTreeMap<&str, BTreeSet<u32>> {
     let mut widths = manifest
-        .items
+        .catalog_items()
         .iter()
         .map(|item| {
             (
@@ -596,7 +620,7 @@ fn component_test_matrix(manifest: &PluginManifest) -> BTreeMap<&str, BTreeSet<u
             )
         })
         .collect::<BTreeMap<_, _>>();
-    for bar in &manifest.bars {
+    for bar in manifest.catalog_bars() {
         for element in &bar.elements {
             collect_presentation_test_widths(element, &mut widths);
         }
@@ -726,17 +750,19 @@ fn dev(args: &[String]) -> Result<()> {
     )?;
     let root = package_root(args)?;
     let package = inspect_package(&root)?;
-    let RuntimeSpec::Component { .. } = &package.manifest.runtime else {
+    let (RuntimeSpec::Component { .. } | RuntimeSpec::ButtonSetLogic { .. }) =
+        &package.manifest.runtime
+    else {
         bail!("sandboxed dev mode supports component plugins")
     };
-    if package.manifest.items.is_empty() {
+    if package.manifest.catalog_items().is_empty() {
         bail!("plugin has no items");
     }
     let selected = opt(args, "--item");
     if selected.is_some_and(|selected| {
         !package
             .manifest
-            .items
+            .catalog_items()
             .iter()
             .any(|item| item.id == selected)
     }) {
@@ -859,14 +885,21 @@ fn run_on_hardware(args: &[String]) -> Result<()> {
         0,
     )?;
     let root = package_root(args)?;
-    let initial_manifest = read_manifest(&root)?;
-    if initial_manifest.items.is_empty() {
+    let mut initial_manifest = read_manifest(&root)?;
+    if !initial_manifest.sets.is_empty() {
+        let files = touchbar_package::read_set_files(&root, &initial_manifest)?;
+        initial_manifest.resolved_sets = Some(touchbar_package::resolve_set_catalog(
+            &initial_manifest,
+            &files,
+        )?);
+    }
+    if initial_manifest.catalog_items().is_empty() {
         bail!("plugin has no items");
     }
     let selected = opt(args, "--item");
     if selected.is_some_and(|selected| {
         !initial_manifest
-            .items
+            .catalog_items()
             .iter()
             .any(|item| item.id == selected)
     }) {
@@ -905,8 +938,10 @@ fn run_on_hardware(args: &[String]) -> Result<()> {
     {
         bail!("--hardware-socket must be a normalized absolute path");
     }
-    if matches!(initial_manifest.runtime, RuntimeSpec::Component { .. })
-        && root.join("Cargo.toml").is_file()
+    if matches!(
+        initial_manifest.runtime,
+        RuntimeSpec::Component { .. } | RuntimeSpec::ButtonSetLogic { .. }
+    ) && root.join("Cargo.toml").is_file()
     {
         build_component(&root)?;
     }
@@ -1285,7 +1320,7 @@ fn finish_dev_process(name: &str, status: ExitStatus) -> Result<()> {
 }
 
 fn pack(args: &[String]) -> Result<()> {
-    reject(args, &["--package", "--output"], 0)?;
+    reject(args, &["--package", "--output", "--host"], 0)?;
     let root = package_root(args)?;
     let default = github::RELEASE_ASSET_NAME.to_owned();
     let output = opt(args, "--output")
@@ -1293,6 +1328,19 @@ fn pack(args: &[String]) -> Result<()> {
         .unwrap_or_else(|| root.join(default));
     if output.exists() {
         bail!("{} already exists", output.display())
+    }
+    let inspection = inspect_package(&root)?;
+    if matches!(
+        inspection.manifest.runtime,
+        RuntimeSpec::ButtonSetLogic { .. }
+    ) {
+        let host = binary(
+            args,
+            "--host",
+            "TOUCHBAR_PLUGIN_HOST",
+            "touchbar-plugin-host",
+        )?;
+        test_component_package(&root, &inspection, &host)?;
     }
     let package = pack_directory(&root, &output)?;
     println!("Packed {}\n{}", output.display(), package.package_digest);
@@ -1487,7 +1535,10 @@ fn validate_catalog_releases(catalog: &Catalog, host: &Path) -> Result<Vec<serde
                 entry.alias
             );
         }
-        if matches!(package.manifest.runtime, RuntimeSpec::Component { .. }) {
+        if matches!(
+            package.manifest.runtime,
+            RuntimeSpec::Component { .. } | RuntimeSpec::ButtonSetLogic { .. }
+        ) {
             test_component_package(&package.root, &package, host)
                 .with_context(|| format!("run catalog entry `{}`", entry.alias))?;
         }
@@ -1891,7 +1942,9 @@ fn plan_install(
     environment: &InstallEnvironment,
 ) -> Result<InstallPlan> {
     let runtime = match package.manifest.runtime {
-        RuntimeSpec::Component { .. } => RuntimeKind::Component,
+        RuntimeSpec::Component { .. } | RuntimeSpec::ButtonSetLogic { .. } => {
+            RuntimeKind::Component
+        }
         RuntimeSpec::Native { .. } => RuntimeKind::Native,
     };
     let native = runtime == RuntimeKind::Native;

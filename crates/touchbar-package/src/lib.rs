@@ -15,6 +15,8 @@ use semver::{Version, VersionReq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 mod asset_bundle;
+mod sets;
+pub use sets::{ResolvedSetCatalog, SetReference, read_set_files, resolve_set_catalog};
 
 pub use asset_bundle::{
     AssetBundleError, BundledAsset, MAX_ASSET_BUNDLE_BYTES, MAX_ASSET_FILE_BYTES,
@@ -24,6 +26,7 @@ pub use asset_bundle::{
 pub const MANIFEST_FILE_NAME: &str = "touchbar-plugin.toml";
 pub const SUPPORTED_MANIFEST_VERSION: u32 = 1;
 pub const SUPPORTED_HOST_API_VERSION: &str = "1.0.0";
+pub const SUPPORTED_BUTTON_SET_WORLD: &str = "touchbar:plugin/button-set-logic@1.0.0";
 pub const SUPPORTED_COMPONENT_WORLD: &str = "touchbar:plugin/plugin@1.0.0";
 pub const SUPPORTED_APPEARANCE_PROVIDER_WORLD: &str = "touchbar:plugin/appearance-provider@1.0.0";
 pub const MAX_ASSETS: usize = 64;
@@ -56,6 +59,11 @@ pub struct PluginManifest {
     pub runtime: RuntimeSpec,
     #[serde(default)]
     pub items: Vec<ItemContribution>,
+    #[serde(default)]
+    pub sets: Vec<SetReference>,
+    /// Verified in-memory metadata; never written into the package manifest.
+    #[serde(skip)]
+    pub resolved_sets: Option<ResolvedSetCatalog>,
     #[serde(default, rename = "bar")]
     pub bars: Vec<PresentationBar>,
     #[serde(default, rename = "profile")]
@@ -92,14 +100,41 @@ impl PluginManifest {
         validate_nonempty(&mut issues, "plugin.description", &self.plugin.description);
         validate_nonempty(&mut issues, "plugin.license", &self.plugin.license);
 
-        if self.items.is_empty() {
+        if self.items.is_empty() && self.sets.is_empty() {
             issues.push(ValidationIssue::new(
                 "items",
                 "a plugin pack must contribute at least one stable item",
             ));
         }
 
+        if !self.sets.is_empty() && !self.items.is_empty() {
+            issues.push(ValidationIssue::new(
+                "sets",
+                "sets and legacy items cannot be mixed",
+            ));
+        }
+        let logic = matches!(self.runtime, RuntimeSpec::ButtonSetLogic { .. });
+        if logic != !self.sets.is_empty() {
+            issues.push(ValidationIssue::new(
+                "sets",
+                "button-set-logic requires declarative sets exclusively",
+            ));
+        }
+        if self.sets.len() > 64 {
+            issues.push(ValidationIssue::new("sets", "at most 64 sets"));
+        }
+        let mut set_paths = BTreeSet::new();
         let mut item_ids = BTreeSet::new();
+        for (index, reference) in self.sets.iter().enumerate() {
+            validate_kebab_id(&mut issues, &format!("sets[{index}].id"), &reference.id);
+            validate_package_path(&mut issues, &format!("sets[{index}].file"), &reference.file);
+            if !reference.file.ends_with(".toml") {
+                issues.push(ValidationIssue::new("sets.file", "requires a TOML file"));
+            }
+            if !item_ids.insert(&reference.id) || !set_paths.insert(&reference.file) {
+                issues.push(ValidationIssue::new("sets", "duplicate set ID or file"));
+            }
+        }
         for (index, item) in self.items.iter().enumerate() {
             let field = format!("items[{index}].id");
             validate_kebab_id(&mut issues, &field, &item.id);
@@ -200,7 +235,10 @@ impl PluginManifest {
             ));
         }
         if !self.appearance_providers.is_empty()
-            && !matches!(self.runtime, RuntimeSpec::Component { .. })
+            && !matches!(
+                self.runtime,
+                RuntimeSpec::Component { .. } | RuntimeSpec::ButtonSetLogic { .. }
+            )
         {
             issues.push(ValidationIssue::new(
                 "appearance-provider",
@@ -399,7 +437,8 @@ impl PluginManifest {
         }
 
         match &self.runtime {
-            RuntimeSpec::Component { entrypoint, world } => {
+            RuntimeSpec::Component { entrypoint, world }
+            | RuntimeSpec::ButtonSetLogic { entrypoint, world } => {
                 validate_package_path(&mut issues, "runtime.entrypoint", entrypoint);
                 if Path::new(entrypoint)
                     .extension()
@@ -411,7 +450,16 @@ impl PluginManifest {
                         "a component entrypoint must have a .wasm extension",
                     ));
                 }
-                validate_world(&mut issues, world);
+                if matches!(self.runtime, RuntimeSpec::ButtonSetLogic { .. }) {
+                    if world != SUPPORTED_BUTTON_SET_WORLD {
+                        issues.push(ValidationIssue::new(
+                            "runtime.world",
+                            format!("must be {SUPPORTED_BUTTON_SET_WORLD}"),
+                        ));
+                    }
+                } else {
+                    validate_world(&mut issues, world);
+                }
             }
             RuntimeSpec::Native { targets } => {
                 if targets.is_empty() {
@@ -534,9 +582,26 @@ impl PluginManifest {
         self.plugin.api.matches(host_api)
     }
 
+    pub fn catalog_items(&self) -> &[ItemContribution] {
+        self.resolved_sets
+            .as_ref()
+            .map_or(&self.items, |catalog| &catalog.items)
+    }
+    pub fn catalog_profiles(&self) -> &[AutomaticProfile] {
+        self.resolved_sets
+            .as_ref()
+            .map_or(&self.profiles, |catalog| &catalog.profiles)
+    }
+    pub fn catalog_bars(&self) -> &[PresentationBar] {
+        self.resolved_sets
+            .as_ref()
+            .map_or(&self.bars, |catalog| &catalog.bars)
+    }
+
     pub fn artifact_paths(&self) -> ArtifactPaths<'_> {
         let runtime = match &self.runtime {
-            RuntimeSpec::Component { entrypoint, .. } => {
+            RuntimeSpec::Component { entrypoint, .. }
+            | RuntimeSpec::ButtonSetLogic { entrypoint, .. } => {
                 RuntimeArtifactPaths::One(Some(entrypoint.as_str()))
             }
             RuntimeSpec::Native { targets } => RuntimeArtifactPaths::Many(targets.iter()),
@@ -545,6 +610,7 @@ impl PluginManifest {
             runtime,
             providers: self.appearance_providers.iter(),
             assets: self.assets.iter(),
+            sets: self.sets.iter(),
         }
     }
 }
@@ -577,6 +643,7 @@ pub struct ArtifactPaths<'a> {
     runtime: RuntimeArtifactPaths<'a>,
     providers: std::slice::Iter<'a, AppearanceProvider>,
     assets: std::slice::Iter<'a, AssetDefinition>,
+    sets: std::slice::Iter<'a, SetReference>,
 }
 
 impl<'a> Iterator for ArtifactPaths<'a> {
@@ -591,6 +658,7 @@ impl<'a> Iterator for ArtifactPaths<'a> {
                     .map(|provider| provider.entrypoint.as_str())
             })
             .or_else(|| self.assets.next().map(|asset| asset.path.as_str()))
+            .or_else(|| self.sets.next().map(|set| set.file.as_str()))
     }
 }
 
@@ -698,6 +766,7 @@ impl<'de> Deserialize<'de> for GithubSource {
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum RuntimeSpec {
     Component { entrypoint: String, world: String },
+    ButtonSetLogic { entrypoint: String, world: String },
     Native { targets: Vec<NativeTarget> },
 }
 
@@ -1758,6 +1827,8 @@ maximum_width = 80
                 principal_item: None,
             }],
             profiles: Vec::new(),
+            sets: Vec::new(),
+            resolved_sets: None,
             appearance_providers: Vec::new(),
             assets: Vec::new(),
             permissions: Vec::new(),

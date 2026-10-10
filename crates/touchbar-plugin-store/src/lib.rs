@@ -361,7 +361,9 @@ impl PluginStore {
             })
             .unwrap_or_default();
         let runtime = match inspection.manifest.runtime {
-            RuntimeSpec::Component { .. } => InstalledRuntime::Component,
+            RuntimeSpec::Component { .. } | RuntimeSpec::ButtonSetLogic { .. } => {
+                InstalledRuntime::Component
+            }
             RuntimeSpec::Native { .. } => InstalledRuntime::Native,
         };
         let package_changed = previous.is_some_and(|plugin| {
@@ -384,16 +386,16 @@ impl PluginStore {
             origin: origin.clone(),
             items: inspection
                 .manifest
-                .items
-                .into_iter()
+                .catalog_items()
+                .iter()
                 .map(|item| {
                     let (enabled, width) = previous_items
                         .get(item.id.as_str())
                         .copied()
                         .unwrap_or((true, item.default_width));
                     InstalledItem {
-                        id: item.id,
-                        label: item.label,
+                        id: item.id.clone(),
+                        label: item.label.clone(),
                         width,
                         enabled,
                     }
@@ -401,15 +403,15 @@ impl PluginStore {
                 .collect(),
             profiles: inspection
                 .manifest
-                .profiles
-                .into_iter()
+                .catalog_profiles()
+                .iter()
                 .map(|profile| InstalledProfile {
                     enabled: previous_profiles
                         .get(profile.id.as_str())
                         .copied()
                         .unwrap_or(profile.enabled_by_default),
-                    id: profile.id,
-                    label: profile.label,
+                    id: profile.id.clone(),
+                    label: profile.label.clone(),
                 })
                 .collect(),
         };
@@ -660,7 +662,7 @@ pub fn inspect_package(root: &Path) -> Result<PackageInspection> {
     }
     let manifest_path = root.join(MANIFEST_FILE_NAME);
     let manifest_source = read_bounded_regular(&manifest_path, 1024 * 1024)?;
-    let manifest = PluginManifest::from_toml(
+    let mut manifest = PluginManifest::from_toml(
         std::str::from_utf8(&manifest_source).context("plugin manifest is not UTF-8")?,
     )?;
     let host_api =
@@ -701,7 +703,7 @@ pub fn inspect_package(root: &Path) -> Result<PackageInspection> {
         bail!("package contains too many files");
     }
     let executable_paths = match &manifest.runtime {
-        RuntimeSpec::Component { .. } => BTreeSet::new(),
+        RuntimeSpec::Component { .. } | RuntimeSpec::ButtonSetLogic { .. } => BTreeSet::new(),
         RuntimeSpec::Native { targets } => targets
             .iter()
             .map(|target| PathBuf::from(&target.entrypoint))
@@ -743,6 +745,15 @@ pub fn inspect_package(root: &Path) -> Result<PackageInspection> {
             Ok((path.to_owned(), digest))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
+    if !manifest.sets.is_empty() {
+        let files = touchbar_package::read_set_files(&root, &manifest)?;
+        for (path, bytes) in &files {
+            if artifacts.get(path) != Some(&format!("sha256:{:x}", Sha256::digest(bytes))) {
+                bail!("set changed during inspection: {path}");
+            }
+        }
+        manifest.resolved_sets = Some(touchbar_package::resolve_set_catalog(&manifest, &files)?);
+    }
     Ok(PackageInspection {
         root,
         manifest,

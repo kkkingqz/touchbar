@@ -9,3 +9,6 @@ semver.workspace = true
 touchbar-layout = { path = "../touchbar-layout" }
 serde.workspace = true
 toml.workspace = true
+anyhow.workspace = true
+libc.workspace = true
+touchbar-set-config = { path = "../touchbar-set-config" }

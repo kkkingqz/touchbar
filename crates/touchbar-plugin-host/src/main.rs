@@ -74,7 +74,11 @@ fn main() -> Result<()> {
         Mode::Replay { scenario, .. } => Some(replay::Scenario::load(scenario)?),
         _ => None,
     };
-    let opened = open_package(package, live, replay_scenario.as_ref())?;
+    let requested = match &mode {
+        Mode::Headless { item, .. } | Mode::Live { item, .. } => item.as_deref(),
+        Mode::Replay { .. } => replay_scenario.as_ref().map(replay::Scenario::item),
+    };
+    let opened = open_package(package, live, replay_scenario.as_ref(), requested)?;
     match mode {
         Mode::Headless {
             item,
@@ -299,6 +303,7 @@ fn open_package(
     package: PathBuf,
     live: bool,
     replay_scenario: Option<&replay::Scenario>,
+    requested: Option<&str>,
 ) -> Result<OpenedPackage> {
     let root = package
         .canonicalize()
@@ -337,11 +342,15 @@ fn open_package(
                 }
             };
             let display = match &manifest.runtime {
-                RuntimeSpec::Component { entrypoint, .. } => root.join(entrypoint),
+                RuntimeSpec::Component { entrypoint, .. }
+                | RuntimeSpec::ButtonSetLogic { entrypoint, .. } => root.join(entrypoint),
                 RuntimeSpec::Native { .. } => {
                     bail!("touchbar-plugin-host requires a component package")
                 }
             };
+            if matches!(manifest.runtime, RuntimeSpec::ButtonSetLogic { .. }) {
+                bail!("button sets require verified sealed set transport");
+            }
             let mut host = PluginRuntime::from_bytes_with_broker(&component, limits, broker)?;
             host.set_assets(assets);
             (manifest, display, host, None)
@@ -351,12 +360,13 @@ fn open_package(
         }
         (false, None, None, None) => {
             let manifest_path = root.join(MANIFEST_FILE_NAME);
-            let manifest = PluginManifest::from_toml(
+            let mut manifest = PluginManifest::from_toml(
                 &fs::read_to_string(&manifest_path)
                     .with_context(|| format!("read {}", manifest_path.display()))?,
             )?;
             let entrypoint = match &manifest.runtime {
-                RuntimeSpec::Component { entrypoint, .. } => entrypoint.clone(),
+                RuntimeSpec::Component { entrypoint, .. }
+                | RuntimeSpec::ButtonSetLogic { entrypoint, .. } => entrypoint.clone(),
                 RuntimeSpec::Native { .. } => {
                     bail!("touchbar-plugin-host requires a component package")
                 }
@@ -378,20 +388,46 @@ fn open_package(
                 .map_or((None, None), |(broker, controller)| {
                     (Some(broker), Some(controller))
                 });
-            let mut host = PluginRuntime::from_file_with_broker(&component, limits, broker)?;
+            let mut host = if matches!(manifest.runtime, RuntimeSpec::ButtonSetLogic { .. }) {
+                let files = touchbar_package::read_set_files(&root, &manifest)?;
+                let catalog = touchbar_package::resolve_set_catalog(&manifest, &files)?;
+                let selected = requested
+                    .or_else(|| manifest.sets.first().map(|reference| reference.id.as_str()))
+                    .context("no sets declared")?;
+                let set = catalog
+                    .documents
+                    .get(selected)
+                    .context("unknown set")?
+                    .clone();
+                manifest.resolved_sets = Some(catalog);
+                touchbar_plugin_host::sets::ButtonSetHost::from_bytes_with_broker(
+                    &fs::read(&component)?,
+                    set,
+                    limits,
+                    broker,
+                )?
+                .into()
+            } else {
+                PluginRuntime::from_file_with_broker(&component, limits, broker)?
+            };
             host.set_assets(assets);
             (manifest, component, host, replay_broker)
         }
         (false, _, _, _) => bail!("sealed package descriptors require supervisor transport"),
     };
     let world = match &manifest.runtime {
-        RuntimeSpec::Component { world, .. } => world.clone(),
+        RuntimeSpec::Component { world, .. } | RuntimeSpec::ButtonSetLogic { world, .. } => {
+            world.clone()
+        }
         RuntimeSpec::Native { .. } => bail!("touchbar-plugin-host requires a component package"),
     };
     let items = host.items()?;
+    let is_set = matches!(manifest.runtime, RuntimeSpec::ButtonSetLogic { .. });
+    let selected = items.first().map(|item| item.id.as_str());
     let declared = manifest
-        .items
+        .catalog_items()
         .iter()
+        .filter(|item| !is_set || Some(item.id.as_str()) == selected)
         .map(|item| (&item.id, &item.label))
         .collect::<Vec<_>>();
     let exported = items

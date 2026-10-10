@@ -55,7 +55,7 @@ impl CompiledSet {
             + set
                 .panels
                 .iter()
-                .map(|panel| count(&panel.layout))
+                .map(|panel| panel.layout.as_ref().map_or(0, count))
                 .sum::<usize>()
             > limits.max_nodes
         {
@@ -80,7 +80,9 @@ impl CompiledSet {
         let mut sources = BTreeSet::new();
         check_effects(&set.layout, &mut sources)?;
         for panel in &set.panels {
-            check_effects(&panel.layout, &mut sources)?;
+            if let Some(layout) = &panel.layout {
+                check_effects(layout, &mut sources)?;
+            }
         }
         if sources.len() > limits.max_effect_programs {
             bail!("effect program budget exceeded");
@@ -120,7 +122,13 @@ impl CompiledSet {
             .iter()
             .find(|definition| definition.id == panel)
             .context("unknown panel")?;
-        self.render_layout(&panel.layout, state, viewport, now, assets)
+        self.render_layout(
+            panel.layout.as_ref().unwrap_or(&self.document.layout),
+            state,
+            viewport,
+            now,
+            assets,
+        )
     }
     fn render_layout(
         &self,

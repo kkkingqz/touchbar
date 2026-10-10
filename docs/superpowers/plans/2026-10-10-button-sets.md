@@ -135,17 +135,17 @@ flatpak-spawn --host /usr/bin/bash -c \
 
 **Interfaces:** `RuntimeSpec::ButtonSetLogic { entrypoint, world }`, `SetReference { id, file }`; `ResolvedSetCatalog { documents, items, profiles, bars }`; `resolve_set_catalog(manifest: &PluginManifest, files: &BTreeMap<String, Vec<u8>>) -> anyhow::Result<ResolvedSetCatalog>`. Catalog metadata преобразуется в существующие ItemContribution/AutomaticProfile/PresentationBar без записи синтетических данных обратно в manifest. Selection.priority хранится отдельно для session catalog. InstalledRuntime остаётся Component для sandboxed logic; world отличает новый контракт.
 
-- [ ] Написать `set_files_are_locked_artifacts`, `set_items_install_without_legacy_items`, `mixed_items_and_sets_rejected`, `set_id_must_match_reference`, `set_path_escape_rejected`, `archive_roundtrip_keeps_sets`, `layout_only_update_changes_package_not_wasm`. Assert digest файла присутствует; архив/install содержит описание; изменение TOML меняет package digest, digest Wasm сохраняется.
+- [x] Написать `set_files_are_locked_artifacts`, `set_items_install_without_legacy_items`, `mixed_items_and_sets_rejected`, `set_id_must_match_reference`, `set_path_escape_rejected`, `archive_roundtrip_keeps_sets`, `layout_only_update_changes_package_not_wasm`. Assert digest файла присутствует; архив/install содержит описание; изменение TOML меняет package digest, digest Wasm сохраняется.
 
   ```rust
   assert!(inspection.artifacts.contains_key("sets/browser.toml"));
   assert_ne!(package_digest_before, package_digest_after);
   assert_eq!(wasm_digest_before, wasm_digest_after);
   ```
-- [ ] Выполнить `tb_cargo test -p touchbar-package -p touchbar-plugin-store`; новые тесты падают.
-- [ ] Реализовать manifest validation и artifact_paths; reuse normalized relative path/no symlink rules. При inspect/install/pack материализовать каталог в памяти; items/profiles и отключённость сохраняют прежнюю модель store. CLI build/check/pack принимает новый world, использует entrypoint и проверяет set bindings headless. Panels объявляют layout владельца и могут ссылаться на другие явно зарегистрированные items своего пакета через существующие bar refs; ссылки на отсутствующий item — ошибка. Панель владельца использует его Store, ссылки на самостоятельные наборы используют собственные Store. Не создавать скрытые синтетические наборы или второй экземпляр логики только для раскрытия панели.
-- [ ] Выполнить package/store tests и CLI scaffold/build/check tests для обоих world; старые manifests не требуют нового поля.
-- [ ] Коммит: `feat: package and validate declarative button sets`.
+- [x] Выполнить `tb_cargo test -p touchbar-package -p touchbar-plugin-store`; новые тесты падают.
+- [x] Реализовать manifest validation и artifact_paths; reuse normalized relative path/no symlink rules. При inspect/install/pack материализовать каталог в памяти; items/profiles и отключённость сохраняют прежнюю модель store. CLI build/check/pack принимает новый world, использует entrypoint и проверяет set bindings headless. Panels объявляют layout владельца и могут ссылаться на другие явно зарегистрированные items своего пакета через существующие bar refs; ссылки на отсутствующий item — ошибка. Панель владельца использует его Store, ссылки на самостоятельные наборы используют собственные Store. Не создавать скрытые синтетические наборы или второй экземпляр логики только для раскрытия панели.
+- [x] Выполнить package/store tests и CLI scaffold/build/check tests для обоих world; старые manifests не требуют нового поля.
+- [x] Коммит: `feat: package and validate declarative button sets`.
 
 ### Task 6: Sealed transport и включение runtime в sessiond
 

@@ -58,7 +58,7 @@ pub struct Selection {
 #[serde(deny_unknown_fields)]
 pub struct PanelDefinition {
     pub id: String,
-    pub layout: LayoutNode,
+    pub layout: Option<LayoutNode>,
     #[serde(default)]
     pub minimum_width: u32,
     #[serde(default = "default_width")]
@@ -280,8 +280,10 @@ impl SetDocument {
             for item in &panel.items {
                 validate_name(item)?;
             }
-            validate_node(&panel.layout, 1, &mut budget)
-                .with_context(|| format!("panel {}", panel.id))?;
+            if let Some(layout) = &panel.layout {
+                validate_node(layout, 1, &mut budget)
+                    .with_context(|| format!("panel {}", panel.id))?;
+            }
         }
         for reference in [&self.expanded_panel, &self.press_and_hold_panel]
             .into_iter()
@@ -302,7 +304,9 @@ impl SetDocument {
         description.validate()?;
         validate_node_bindings(&self.layout, description, None)?;
         for panel in &self.panels {
-            validate_node_bindings(&panel.layout, description, None)?;
+            if let Some(layout) = &panel.layout {
+                validate_node_bindings(layout, description, None)?;
+            }
         }
         Ok(())
     }
