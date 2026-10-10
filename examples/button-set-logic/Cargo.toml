@@ -1,0 +1,12 @@
+[package]
+name = "touchbar-button-set-logic-demo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+touchbar-logic-sdk = { path = "../../crates/touchbar-logic-sdk" }
+touchbar-set-config = { path = "../../crates/touchbar-set-config" }

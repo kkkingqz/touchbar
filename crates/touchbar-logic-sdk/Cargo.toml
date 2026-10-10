@@ -1,0 +1,10 @@
+[package]
+name = "touchbar-logic-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+touchbar-component-sdk = { path = "../touchbar-component-sdk" }
+touchbar-set-config = { path = "../touchbar-set-config" }
+wit-bindgen.workspace = true

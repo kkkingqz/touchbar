@@ -587,3 +587,55 @@ world appearance-provider {
     export tick: func() -> result<_, string>;
     export handle-host-event: func(event: host-event) -> result<_, string>;
 }
+
+/// Logic and state only: the host owns the declarative layout and rendering.
+interface set-logic {
+    use ui.{input-kind, presentation-command};
+
+    enum scalar-type { boolean, number, text }
+    variant scalar-value { boolean(bool), number(f64), text(string) }
+    record record-schema {
+        key: string,
+        fields: list<tuple<string, scalar-type>>,
+    }
+    variant state-type { boolean, number, text, records(record-schema) }
+    record state-record { fields: list<tuple<string, scalar-value>> }
+    variant state-value { boolean(bool), number(f64), text(string), records(list<state-record>) }
+    type state-patch = list<tuple<string, state-value>>;
+    record action-description {
+        events: list<input-kind>,
+        value-type: option<scalar-type>,
+    }
+    record logic-description {
+        actions: list<tuple<string, action-description>>,
+        state: list<tuple<string, state-type>>,
+    }
+    record action-event {
+        action: string,
+        kind: input-kind,
+        value: option<scalar-value>,
+        contact-id: u64,
+        record-key: option<string>,
+    }
+    record logic-update {
+        state: state-patch,
+        presentation: option<presentation-command>,
+    }
+}
+
+world button-set-logic {
+    use set-logic.{logic-description, state-patch, action-event, logic-update};
+    use ui.{presentation-event, render-request};
+    use broker.{host-event};
+
+    import broker;
+    export describe: func() -> logic-description;
+    export initialize: func(item-id: string, logic-config: string) -> result<state-patch, string>;
+    export handle-action: func(event: action-event) -> result<logic-update, string>;
+    /// Pure notification of viewport/theme changes; broker effects are
+    /// forbidden here, as in the legacy render callback.
+    export handle-context-changed: func(request: render-request) -> result<logic-update, string>;
+    export handle-visibility-changed: func(visible: bool) -> result<logic-update, string>;
+    export handle-presentation-event: func(event: presentation-event) -> result<logic-update, string>;
+    export handle-host-event: func(event: host-event) -> result<logic-update, string>;
+}
