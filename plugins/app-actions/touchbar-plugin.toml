@@ -9,19 +9,17 @@ source = "github:cameroncooper/touchbar-app-actions"
 api = "^1.0"
 
 [runtime]
-kind = "component"
+kind = "button-set-logic"
 entrypoint = "component/plugin.wasm"
-world = "touchbar:plugin/plugin@1.0.0"
+world = "touchbar:plugin/button-set-logic@1.0.0"
 
-[[items]]
+[[sets]]
 id = "browser"
-label = "Browser Navigation"
-default_width = 240
+file = "sets/browser.toml"
 
-[[items]]
+[[sets]]
 id = "formatting"
-label = "Text Formatting"
-default_width = 240
+file = "sets/formatting.toml"
 
 [[asset]]
 id = "reload"

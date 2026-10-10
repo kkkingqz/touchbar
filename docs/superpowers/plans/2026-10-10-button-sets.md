@@ -184,7 +184,7 @@ flatpak-spawn --host /usr/bin/bash -c \
 
 **Interfaces:** LogicDescription actions `back`, `forward`, `reload`, `bold`, `italic`, `underline`; state `shortcuts_available: bool`. initialize принимает `logic_config` browser/formatting; общий `actions.rs` используется обеими конфигурациями, UI builders удаляются.
 
-- [ ] Написать `browser_matches_previous_buttons`, `formatting_matches_previous_buttons`, `compact_browser_reuses_identical_wasm`, `same_action_names_do_not_share_state`, `profile_switch_cancels_late_activation`. Assert current shortcut IDs и application scopes, item IDs, ширина 240 и reload asset не меняются; два одновременно открытых набора имеют разный capability/state fixture и раздельный результат.
+- [x] Написать `browser_matches_previous_buttons`, `formatting_matches_previous_buttons`, `compact_browser_reuses_identical_wasm`, `same_action_names_do_not_share_state`, `profile_switch_cancels_late_activation`. Assert current shortcut IDs и application scopes, item IDs, ширина 240 и reload asset не меняются; два одновременно открытых набора имеют разный capability/state fixture и раздельный результат.
 
   ```rust
   assert_eq!(browser_width, 240);
@@ -193,10 +193,10 @@ flatpak-spawn --host /usr/bin/bash -c \
   assert_eq!(formatting_widget_ids, vec![20, 21, 22]);
   assert_eq!(wasm_digest_before_new_layout, wasm_digest_after_new_layout);
   ```
-- [ ] Выполнить новые headless/replay/acceptance fixtures до миграции; ожидается отсутствие declarative sets.
-- [ ] Перенести полный UI в два файла, действия — в новый world. Проверку keys/applications оставить в permission scope, не копировать в layout. Compact-browser — тестовый новый файл с тем же Wasm, не постоянная новая продуктовая кнопка.
-- [ ] Build/check/replay app-actions и host acceptance; сравнить digest Wasm при перестановке кнопок и добавлении compact set: идентичен.
-- [ ] Коммит: `refactor: separate app action layouts from shared logic`.
+- [x] Выполнить новые headless/replay/acceptance fixtures до миграции; ожидается отсутствие declarative sets.
+- [x] Перенести полный UI в два файла, действия — в новый world. Проверку keys/applications оставить в permission scope, не копировать в layout. Compact-browser — тестовый новый файл с тем же Wasm, не постоянная новая продуктовая кнопка.
+- [x] Build/check/replay app-actions и host acceptance; сравнить digest Wasm при перестановке кнопок и добавлении compact set: идентичен.
+- [x] Коммит: `refactor: separate app action layouts from shared logic`.
 
 ### Task 9: Controls — sliders, очереди и функции движка
 

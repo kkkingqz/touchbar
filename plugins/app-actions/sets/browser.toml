@@ -1,0 +1,49 @@
+version = 1
+id = "browser"
+label = "Browser Navigation"
+default_width = 240
+logic_config = "browser"
+
+[layout]
+kind = "row"
+spacing = 6
+padding = 2
+
+[[layout.children]]
+kind = "button"
+widget_id = 10
+label = "Back"
+minimum = 44
+width = 72
+maximum = 120
+grow = 1
+padding = 8
+enabled_from = "shortcuts_available"
+on_activate = "back"
+symbol = "chevron.left"
+
+[[layout.children]]
+kind = "button"
+widget_id = 11
+label = "Forward"
+minimum = 44
+width = 72
+maximum = 120
+grow = 1
+padding = 8
+enabled_from = "shortcuts_available"
+on_activate = "forward"
+symbol = "chevron.right"
+
+[[layout.children]]
+kind = "button"
+widget_id = 12
+label = "Reload"
+minimum = 44
+width = 72
+maximum = 120
+grow = 1
+padding = 8
+enabled_from = "shortcuts_available"
+on_activate = "reload"
+asset = "reload"

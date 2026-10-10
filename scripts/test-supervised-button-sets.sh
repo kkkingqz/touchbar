@@ -16,7 +16,7 @@ build_flags=()
 cargo build --quiet --manifest-path "$project_dir/Cargo.toml" "${build_flags[@]}" \
     -p touchbar-plugin-host -p touchbar-plugin-supervisor
 cargo build --quiet --release --manifest-path "$project_dir/Cargo.toml" \
-    -p touchbar-button-set-logic-demo -p touchbar-broker-component-demo --target wasm32-wasip2
+    -p touchbar-button-set-logic-demo -p touchbar-broker-component-demo -p touchbar-first-party-app-actions --target wasm32-wasip2
 bin="$project_dir/target/$profile"
 package="$stage/package"
 mkdir -p "$package/component" "$package/sets" "$stage/state"
@@ -114,4 +114,27 @@ if "$bin/touchbar-plugin-supervisor" "${legacy_args[@]}" --set-digest "sets/coun
     echo "legacy package accepted unsolicited set bytes" >&2; exit 1
 fi
 rg -q 'set digests do not exactly match' "$stage/unexpected.log"
-echo "supervised-button-sets=ok sealed=true tampering=rejected legacy=compatible"
+# A newly registered App Actions layout reuses the exact same compiled module.
+app_package="$stage/app-actions"
+cp -r "$project_dir/plugins/app-actions" "$app_package"
+cp "$project_dir/target/wasm32-wasip2/release/touchbar_first_party_app_actions.wasm" "$app_package/component/plugin.wasm"
+app_digest="sha256:$(sha256sum "$app_package/component/plugin.wasm" | awk '{print $1}')"
+sed 's/id = "browser"/id = "compact-browser"/; s/default_width = 240/default_width = 120/' \
+    "$app_package/sets/browser.toml" >"$app_package/sets/compact-browser.toml"
+cat >>"$app_package/touchbar-plugin.toml" <<'EOF'
+
+[[sets]]
+id = "compact-browser"
+file = "sets/compact-browser.toml"
+EOF
+app_sets=(--asset-digest "reload=sha256:$(sha256sum "$app_package/assets/reload.svg" | awk '{print $1}')")
+for set in browser formatting compact-browser; do
+    app_sets+=(--set-digest "sets/$set.toml=sha256:$(sha256sum "$app_package/sets/$set.toml" | awk '{print $1}')")
+done
+timeout 30 "$bin/touchbar-plugin-supervisor" "$app_package" --host "$bin/touchbar-plugin-host" \
+    --source github:cameroncooper/touchbar-app-actions --version 1.0.0 --digest "$app_digest" \
+    --provenance local-development --state "$stage/state" "${app_sets[@]}" \
+    -- compact-browser 120 >"$stage/compact.log" 2>&1
+rg -q 'item: compact-browser' "$stage/compact.log"
+[[ "$app_digest" == "sha256:$(sha256sum "$app_package/component/plugin.wasm" | awk '{print $1}')" ]]
+echo "supervised-button-sets=ok sealed=true tampering=rejected legacy=compatible shared_wasm=ok"

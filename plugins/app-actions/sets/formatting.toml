@@ -1,0 +1,52 @@
+version = 1
+id = "formatting"
+label = "Text Formatting"
+default_width = 240
+logic_config = "formatting"
+
+[layout]
+kind = "row"
+spacing = 6
+padding = 2
+
+[[layout.children]]
+kind = "button"
+widget_id = 20
+label = "Bold"
+minimum = 44
+width = 72
+maximum = 120
+grow = 1
+padding = 8
+enabled_from = "shortcuts_available"
+on_activate = "bold"
+text = "B"
+font_size = 15
+
+[[layout.children]]
+kind = "button"
+widget_id = 21
+label = "Italic"
+minimum = 44
+width = 72
+maximum = 120
+grow = 1
+padding = 8
+enabled_from = "shortcuts_available"
+on_activate = "italic"
+text = "I"
+font_size = 15
+
+[[layout.children]]
+kind = "button"
+widget_id = 22
+label = "Underline"
+minimum = 44
+width = 72
+maximum = 120
+grow = 1
+padding = 8
+enabled_from = "shortcuts_available"
+on_activate = "underline"
+text = "U"
+font_size = 15
