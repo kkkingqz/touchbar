@@ -1,0 +1,19 @@
+version = 1
+id = "touchbar-logo"
+label = "TouchBar Logo"
+logic_config = "touchbar-logo"
+
+[layout]
+kind = "row"
+spacing = 0
+padding = 8
+
+[[layout.children]]
+kind = "image"
+asset = "touchbar-wordmark"
+label = "TouchBar"
+color = "accent"
+minimum = 80
+width = 171
+maximum = 1004
+grow = 1

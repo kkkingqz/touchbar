@@ -1,0 +1,128 @@
+version = 1
+id = "now-playing"
+label = "Now Playing"
+logic_config = "now-playing"
+default_width = 320
+expanded_panel = "media-expanded"
+press_and_hold_panel = "media-expanded"
+
+[[panels]]
+id = "media-expanded"
+minimum_width = 600
+preferred_width = 1004
+maximum_width = 1600
+dismiss_on_selection = false
+principal_item = "timeline"
+
+[[panels.element]]
+kind = "item"
+item = "now-playing"
+minimum_width = 160
+preferred_width = 240
+maximum_width = 320
+
+[[panels.element]]
+kind = "item"
+item = "transport"
+minimum_width = 180
+preferred_width = 240
+maximum_width = 300
+
+[[panels.element]]
+kind = "item"
+item = "timeline"
+minimum_width = 240
+preferred_width = 500
+maximum_width = 960
+
+[layout]
+kind = "stack"
+
+[[layout.children]]
+kind = "row"
+spacing = 8
+padding = 14
+visible_from = "no_session"
+
+[[layout.children.children]]
+kind = "image"
+asset = "note"
+label = "Media"
+color = "muted"
+width = 28
+
+[[layout.children.children]]
+kind = "text"
+text_from = "status"
+font_size = 11
+color = "muted"
+visible_from = "wide_empty"
+minimum = 40
+width = 200
+maximum = 1000
+grow = 1
+
+[[layout.children]]
+kind = "row"
+spacing = 4
+padding = 2
+visible_from = "has_session"
+
+[[layout.children.children]]
+kind = "button"
+widget_id = 11
+on_activate = "compact-toggle"
+padding = 10
+asset_from = "toggle_asset"
+label_from = "toggle_label"
+width = 44
+plain = true
+enabled_from = "can_toggle"
+
+[[layout.children.children]]
+kind = "button"
+widget_id = 10
+on_activate = "expand"
+padding = 0
+label = "Show media controls"
+disabled_opacity = 1
+plain = true
+visible_from = "wide_now"
+minimum = 40
+width = 240
+maximum = 1200
+grow = 1
+on_long_pressed = "expand"
+enabled_from = "can_expand"
+hold_ms = 420
+
+[[layout.children.children.children]]
+kind = "column"
+spacing = 4
+padding = 6
+
+[[layout.children.children.children.children]]
+kind = "text"
+text_from = "title"
+font_size = 12
+color = "foreground"
+height = 20
+
+[[layout.children.children.children.children]]
+kind = "progress"
+label = "Track position"
+value_from = "position"
+visible_from = "has_length"
+height = 12
+minimum = 4
+maximum = 16
+grow = 1
+color = "accent"
+
+[[layout.children.children.children.children]]
+kind = "text"
+text_from = "artist"
+font_size = 10
+color = "muted"
+visible_from = "no_length"
+height = 12

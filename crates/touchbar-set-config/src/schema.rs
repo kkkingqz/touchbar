@@ -144,6 +144,8 @@ pub struct LayoutNode {
     pub asset_from: Option<String>,
     pub color: Option<ColorRole>,
     pub background: Option<ColorRole>,
+    #[serde(default)]
+    pub plain: bool,
     pub pressed_background: Option<ColorRole>,
     pub corner_radius: Option<f32>,
     pub font_size: Option<f32>,
@@ -152,6 +154,7 @@ pub struct LayoutNode {
     pub enabled_from: Option<String>,
     pub visible_from: Option<String>,
     pub opacity: Option<f32>,
+    pub disabled_opacity: Option<f32>,
     pub on_pressed: Option<String>,
     pub on_activate: Option<String>,
     pub on_long_pressed: Option<String>,
@@ -404,6 +407,12 @@ fn validate_node(node: &LayoutNode, depth: usize, budget: &mut LayoutBudget) -> 
         || node.value.is_some_and(|v| !v.is_finite())
     {
         bail!("layout contains an invalid opacity or numeric value");
+    }
+    if node
+        .disabled_opacity
+        .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
+    {
+        bail!("invalid disabled opacity");
     }
     if let Some(symbol) = &node.symbol
         && !matches!(

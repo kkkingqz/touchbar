@@ -216,11 +216,11 @@ flatpak-spawn --host /usr/bin/bash -c \
 
 **Interfaces:** Media logic использует EngineApi.media; state содержит player/track metadata, availability, playback, duration/position и seek preview. Layout задаёт transport/timeline/now-playing/list templates, не вычисляет системные команды.
 
-- [ ] Написать `seek_keeps_original_track_id`, `track_change_cancels_seek`, `cancel_restores_preview`, `player_list_reorder_preserves_key`, `lost_player_disables_transport`, `subscription_cleanup_on_hide`. Assert SetPosition содержит правильный track ID; смена track/player отменяет устаревший seek; prev/play/next используют прежние actions.
-- [ ] Выполнить media replay и renderer tests до миграции; новые bindings должны падать.
-- [ ] Перенести UI в файлы, сохранить все assets/ширины/item IDs. Логика ведёт async state, не создаёт дерево. Связать MPRIS события с state patch без периодического busy polling.
-- [ ] Build/check/replay media; существующие media/UI acceptance проходят. Проверить idle redraw и lifecycle подписки.
-- [ ] Коммит: `refactor: separate media layouts and interaction logic`.
+- [x] Написать `seek_keeps_original_track_id`, `track_change_cancels_seek`, `cancel_restores_preview`, `player_list_reorder_preserves_key`, `lost_player_disables_transport`, `subscription_cleanup_on_hide`. Assert SetPosition содержит правильный track ID; смена track/player отменяет устаревший seek; prev/play/next используют прежние actions.
+- [x] Выполнить media replay и renderer tests до миграции; новые bindings должны падать.
+- [x] Перенести UI в файлы, сохранить все assets/ширины/item IDs. Логика ведёт async state, не создаёт дерево. Связать MPRIS события с state patch без периодического busy polling.
+- [x] Build/check/replay media; существующие media/UI acceptance проходят. Проверить idle redraw и lifecycle подписки.
+- [x] Коммит: `refactor: separate media layouts and interaction logic`.
 
 ### Task 11: Остальные встроенные наборы
 

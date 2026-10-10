@@ -1,0 +1,107 @@
+version = 1
+id = "timeline"
+label = "Media Timeline"
+logic_config = "timeline"
+default_width = 1000
+
+[layout]
+kind = "stack"
+
+[[layout.children]]
+kind = "text"
+text_from = "status"
+font_size = 12
+color = "muted"
+visible_from = "no_session"
+
+[[layout.children]]
+kind = "column"
+spacing = 2
+padding = 6
+visible_from = "metadata_only"
+
+[[layout.children.children]]
+kind = "text"
+text_from = "title"
+font_size = 14
+color = "foreground"
+height = 24
+
+[[layout.children.children]]
+kind = "text"
+text_from = "detail"
+font_size = 11
+color = "muted"
+height = 18
+
+[[layout.children]]
+kind = "column"
+spacing = 2
+padding = 6
+visible_from = "has_length"
+
+[[layout.children.children]]
+kind = "row"
+spacing = 6
+padding = 0
+height = 20
+
+[[layout.children.children.children]]
+kind = "text"
+text_from = "title"
+font_size = 13
+color = "foreground"
+minimum = 40
+width = 700
+maximum = 3000
+grow = 1
+
+[[layout.children.children.children]]
+kind = "text"
+text_from = "artist_heading"
+font_size = 13
+color = "muted"
+visible_from = "show_artist_heading"
+minimum = 0
+width = 200
+maximum = 3000
+grow = 1
+
+[[layout.children.children]]
+kind = "row"
+spacing = 8
+padding = 0
+minimum = 20
+height = 26
+maximum = 36
+grow = 1
+
+[[layout.children.children.children]]
+kind = "text"
+text_from = "elapsed"
+font_size = 11
+color = "muted"
+width = 50
+
+[[layout.children.children.children]]
+kind = "scrubber"
+widget_id = 30
+label = "Track position"
+value_from = "position"
+enabled_from = "can_seek"
+minimum = 40
+width = 600
+maximum = 3000
+grow = 1
+on_pressed = "seek"
+on_value_changed = "seek"
+on_activate = "seek"
+on_released = "seek"
+on_cancelled = "seek"
+
+[[layout.children.children.children]]
+kind = "text"
+text_from = "remaining"
+font_size = 11
+color = "muted"
+width = 56

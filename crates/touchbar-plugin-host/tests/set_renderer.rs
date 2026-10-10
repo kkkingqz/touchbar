@@ -209,17 +209,32 @@ fn state_type_mismatch_is_load_error() {
 #[test]
 fn repeated_keys_survive_reorder() {
     let set = compile(REPEAT);
-    let before = buttons(&set, &state(&["a", "b"]));
+    let before = buttons(
+        &set,
+        &state(&[
+            "org.mpris.MediaPlayer2.vlc",
+            "org.mpris.MediaPlayer2.rhythmbox",
+        ]),
+    );
     let target = before[0].id.unwrap().0;
     set.action_for(&event(target, InputKind::Pressed)).unwrap();
-    let after = buttons(&set, &state(&["b", "a"]));
+    let after = buttons(
+        &set,
+        &state(&[
+            "org.mpris.MediaPlayer2.rhythmbox",
+            "org.mpris.MediaPlayer2.vlc",
+        ]),
+    );
     assert_eq!(after[1].id.unwrap().0, target);
     let action = set
         .action_for(&event(target, InputKind::Activated))
         .unwrap()
         .unwrap();
     assert_eq!(action.action, "select");
-    assert_eq!(action.record_key.as_deref(), Some("a"));
+    assert_eq!(
+        action.record_key.as_deref(),
+        Some("org.mpris.MediaPlayer2.vlc")
+    );
 }
 
 #[test]

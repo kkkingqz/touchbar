@@ -1,0 +1,49 @@
+version = 1
+id = "transport"
+label = "Media Transport"
+logic_config = "transport"
+default_width = 280
+
+[layout]
+kind = "row"
+spacing = 6
+padding = 2
+
+[[layout.children]]
+kind = "button"
+widget_id = 20
+on_activate = "previous"
+padding = 12
+label = "Previous track"
+minimum = 40
+width = 88
+maximum = 160
+grow = 1
+asset = "backward"
+enabled_from = "can_previous"
+
+[[layout.children]]
+kind = "button"
+widget_id = 21
+on_activate = "toggle"
+padding = 12
+asset_from = "toggle_asset"
+label_from = "toggle_label"
+minimum = 44
+width = 88
+maximum = 160
+grow = 1
+enabled_from = "can_toggle"
+
+[[layout.children]]
+kind = "button"
+widget_id = 22
+on_activate = "next"
+padding = 12
+label = "Next track"
+minimum = 40
+width = 88
+maximum = 160
+grow = 1
+asset = "forward"
+enabled_from = "can_next"

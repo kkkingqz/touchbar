@@ -396,12 +396,12 @@ impl Builder<'_> {
                             .map(|_| self.boolean(&node.selected_from, false, record))
                             .transpose()?,
                         style: PressableStyle {
-                            background: Some(
+                            background: (!node.plain).then_some(
                                 node.background
                                     .map(color_role)
                                     .unwrap_or(ColorRole::Control),
                             ),
-                            pressed_background: Some(
+                            pressed_background: (!node.plain).then_some(
                                 node.pressed_background
                                     .map(color_role)
                                     .unwrap_or(ColorRole::ControlPressed),
@@ -413,7 +413,7 @@ impl Builder<'_> {
                         child: Box::new(child),
                     }
                 } else {
-                    Node::opacity(0.35, child)
+                    Node::opacity(node.disabled_opacity.unwrap_or(0.35), child)
                 }
             }
             LayoutKind::Text | LayoutKind::Icon | LayoutKind::Image => {

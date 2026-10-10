@@ -9,56 +9,25 @@ source = "github:cameroncooper/touchbar-media"
 api = "^1.0"
 
 [runtime]
-kind = "component"
+kind = "button-set-logic"
 entrypoint = "component/plugin.wasm"
-world = "touchbar:plugin/plugin@1.0.0"
+world = "touchbar:plugin/button-set-logic@1.0.0"
 
-[[items]]
+[[sets]]
 id = "now-playing"
-label = "Now Playing"
-default_width = 320
-expanded_bar = "media-expanded"
-press_and_hold_bar = "media-expanded"
-[[items]]
+file = "sets/now-playing.toml"
+
+[[sets]]
 id = "transport"
-label = "Media Transport"
-default_width = 280
-[[items]]
+file = "sets/transport.toml"
+
+[[sets]]
 id = "timeline"
-label = "Media Timeline"
-default_width = 1000
-[[items]]
+file = "sets/timeline.toml"
+
+[[sets]]
 id = "touchbar-logo"
-label = "TouchBar Logo"
-
-[[bar]]
-id = "media-expanded"
-minimum_width = 600
-preferred_width = 1004
-maximum_width = 1600
-dismiss_on_selection = false
-principal_item = "timeline"
-
-[[bar.element]]
-kind = "item"
-item = "now-playing"
-minimum_width = 160
-preferred_width = 240
-maximum_width = 320
-
-[[bar.element]]
-kind = "item"
-item = "transport"
-minimum_width = 180
-preferred_width = 240
-maximum_width = 300
-
-[[bar.element]]
-kind = "item"
-item = "timeline"
-minimum_width = 240
-preferred_width = 500
-maximum_width = 960
+file = "sets/touchbar-logo.toml"
 
 [[asset]]
 id = "touchbar-wordmark"

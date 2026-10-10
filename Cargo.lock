@@ -3458,6 +3458,8 @@ name = "touchbar-first-party-media"
 version = "0.1.0"
 dependencies = [
  "touchbar-component-sdk",
+ "touchbar-logic-sdk",
+ "touchbar-set-config",
 ]
 
 [[package]]
