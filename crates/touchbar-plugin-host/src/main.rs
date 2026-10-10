@@ -614,7 +614,7 @@ fn run_live(
 
 fn manifest_presentation_sizing(manifest: &PluginManifest, item: &str) -> Option<Sizing> {
     let item = manifest
-        .items
+        .catalog_items()
         .iter()
         .find(|candidate| candidate.id == item)?;
     let ids = [
@@ -624,7 +624,7 @@ fn manifest_presentation_sizing(manifest: &PluginManifest, item: &str) -> Option
     let bars = ids
         .into_iter()
         .flatten()
-        .filter_map(|id| manifest.bars.iter().find(|bar| bar.id == id))
+        .filter_map(|id| manifest.catalog_bars().iter().find(|bar| bar.id == id))
         .collect::<Vec<_>>();
     Some(Sizing::new(
         bars.iter().map(|bar| bar.minimum_width).min()?,
@@ -912,6 +912,7 @@ impl Application for ComponentApplication {
     }
 
     fn touch(&mut self, contact: TouchContact) -> Result<bool> {
+        let captured_before = self.interactions.has_captures();
         let phase = match contact.phase {
             ClientContactPhase::Down => ContactPhase::Down,
             ClientContactPhase::Motion => ContactPhase::Motion,
@@ -927,14 +928,17 @@ impl Application for ComponentApplication {
                 time: contact.time,
             },
         );
-        self.send_ui_events(
+        let changed = self.send_ui_events(
             events,
             Some(InputActivation {
                 origin: activation_origin(contact.origin),
                 input_sequence: contact.input_sequence,
             }),
             contact.id,
-        )
+        )?;
+        // Captures need frames to advance hold deadlines independently of
+        // guest state changes; release also wakes the final frame.
+        Ok(changed || captured_before || self.interactions.has_captures())
     }
 
     fn presentation_session_changed(&mut self, event: PresentationSessionEvent) -> Result<()> {
@@ -1070,5 +1074,80 @@ mod tests {
             poll_timeout_milliseconds(now + Duration::from_micros(250_001), now),
             251
         );
+    }
+    #[test]
+    fn declarative_panel_advertises_original_expanded_sizing() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/controls");
+        let mut manifest = PluginManifest::from_toml(
+            &std::fs::read_to_string(root.join("touchbar-plugin.toml")).unwrap(),
+        )
+        .unwrap();
+        let files = touchbar_package::read_set_files(&root, &manifest).unwrap();
+        manifest.resolved_sets =
+            Some(touchbar_package::resolve_set_catalog(&manifest, &files).unwrap());
+        assert_eq!(
+            manifest_presentation_sizing(&manifest, "volume"),
+            Some(Sizing::new(280, 360, 560))
+        );
+    }
+    #[test]
+    fn press_without_state_patch_wakes_hold_clock() {
+        let bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/wasm32-wasip2/release/touchbar_button_set_logic_demo.wasm"),
+        )
+        .unwrap();
+        let set=touchbar_set_config::SetDocument::from_toml("version=1\nid=\"counter\"\nlabel=\"Counter\"\n[layout]\nkind=\"button\"\nwidget_id=10\nlabel=\"Hold\"\nhold_ms=420\non_activate=\"increment\"").unwrap();
+        let host = touchbar_plugin_host::sets::ButtonSetHost::from_bytes_with_broker(
+            &bytes,
+            set,
+            HostLimits::default(),
+            None,
+        )
+        .unwrap();
+        let mut app = ComponentApplication {
+            host: host.into(),
+            item: "counter".into(),
+            renderer: None,
+            ui: None,
+            interactions: InteractionState::default(),
+            interaction_map: InteractionMap::default(),
+            appearance: Appearance::default(),
+            width: 160,
+            height: 60,
+            visible: true,
+            shown: true,
+            max_frames: None,
+            started: Instant::now(),
+            next_presentation_session: 1,
+            active_presentation_session: None,
+            presentation_requests: VecDeque::new(),
+        };
+        app.rebuild().unwrap();
+        let viewport = app.viewport().unwrap();
+        app.interaction_map = app
+            .ui
+            .as_mut()
+            .unwrap()
+            .resolve(viewport, app.appearance.theme)
+            .interactions;
+        assert!(
+            app.touch(TouchContact {
+                id: 1,
+                phase: ClientContactPhase::Down,
+                x: 30.0,
+                y: 30.0,
+                time: Duration::ZERO,
+                compositor_time: Duration::ZERO,
+                input_sequence: 1,
+                origin: ContactOrigin::Synthetic
+            })
+            .unwrap(),
+            "a capture must wake frames even if the guest emits no patch"
+        );
+        assert!(matches!(
+            app.interactions.tick(Duration::from_millis(421)).as_slice(),
+            [UiEvent::LongPressed { .. }]
+        ));
     }
 }

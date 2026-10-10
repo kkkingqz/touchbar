@@ -1,0 +1,113 @@
+version = 1
+id = "volume"
+label = "Volume"
+logic_config = "volume"
+expanded_panel = "volume-controls"
+press_and_hold_panel = "volume-controls"
+
+[layout]
+kind = "responsive"
+widget_id = 110
+
+[[layout.variants]]
+representation = "minimal"
+minimum_width = 0
+
+[layout.variants.layout]
+kind = "button"
+widget_id = 100
+label = "Expand VOL"
+hold_ms = 420
+enabled_from = "available"
+padding = 8
+on_pressed = "volume"
+on_activate = "volume"
+on_long_pressed = "volume"
+selected_from = "volume_selected"
+
+[[layout.variants.layout.children]]
+kind = "row"
+spacing = 3
+padding = 2
+
+[[layout.variants.layout.children.children]]
+kind = "icon"
+symbol_from = "volume_icon"
+label = "VOL"
+width = 24
+
+[[layout.variants.layout.children.children]]
+kind = "text"
+font_size = 11
+minimum = 36
+width = 80
+maximum = 160
+grow = 1
+text_from = "volume_label"
+
+[[layout.variants]]
+representation = "full"
+minimum_width = 200
+
+[layout.variants.layout]
+kind = "row"
+spacing = 5
+padding = 4
+
+[[layout.variants.layout.children]]
+kind = "icon"
+symbol_from = "volume_icon"
+label = "VOL"
+width = 30
+
+[[layout.variants.layout.children]]
+kind = "slider"
+widget_id = 101
+label = "VOLUME"
+value_from = "volume"
+enabled_from = "available"
+minimum = 60
+width = 120
+maximum = 800
+grow = 1
+on_pressed = "volume-level"
+on_value_changed = "volume-level"
+on_activate = "volume-level"
+on_released = "volume-level"
+on_cancelled = "volume-level"
+
+[[layout.variants.layout.children]]
+kind = "text"
+font_size = 11
+minimum = 34
+width = 48
+maximum = 1000
+text_from = "volume_text"
+
+[[panels]]
+id = "volume-controls"
+minimum_width = 280
+preferred_width = 360
+maximum_width = 560
+dismiss_on_selection = true
+principal_item = "volume"
+
+[[panels.element]]
+kind = "group"
+id = "audio-actions"
+layout = "natural"
+spacing = 8
+
+[[panels.element.element]]
+kind = "item"
+item = "volume"
+minimum_width = 180
+preferred_width = 240
+maximum_width = 460
+
+[[panels.element.element]]
+kind = "item"
+item = "microphone"
+minimum_width = 92
+preferred_width = 112
+maximum_width = 140

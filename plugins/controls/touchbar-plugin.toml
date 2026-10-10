@@ -9,76 +9,29 @@ source = "github:cameroncooper/touchbar-controls"
 api = "^1.0"
 
 [runtime]
-kind = "component"
+kind = "button-set-logic"
 entrypoint = "component/plugin.wasm"
-world = "touchbar:plugin/plugin@1.0.0"
+world = "touchbar:plugin/button-set-logic@1.0.0"
 
-[[items]]
+[[sets]]
 id = "volume"
-label = "Volume"
-expanded_bar = "volume-controls"
-press_and_hold_bar = "volume-controls"
+file = "sets/volume.toml"
 
-[[items]]
+[[sets]]
 id = "brightness"
-label = "Brightness"
-expanded_bar = "brightness-controls"
-press_and_hold_bar = "brightness-controls"
+file = "sets/brightness.toml"
 
-[[items]]
+[[sets]]
 id = "microphone"
-label = "Microphone"
+file = "sets/microphone.toml"
 
-[[items]]
+[[sets]]
 id = "battery"
-label = "Battery"
+file = "sets/battery.toml"
 
-[[items]]
+[[sets]]
 id = "power-profile"
-label = "Power Profile"
-
-[[bar]]
-id = "volume-controls"
-minimum_width = 280
-preferred_width = 360
-maximum_width = 560
-dismiss_on_selection = true
-principal_item = "volume"
-
-[[bar.element]]
-kind = "group"
-id = "audio-actions"
-layout = "natural"
-spacing = 8
-
-[[bar.element.element]]
-kind = "item"
-item = "volume"
-minimum_width = 180
-preferred_width = 240
-maximum_width = 460
-
-[[bar.element.element]]
-kind = "item"
-item = "microphone"
-minimum_width = 92
-preferred_width = 112
-maximum_width = 140
-
-[[bar]]
-id = "brightness-controls"
-minimum_width = 240
-preferred_width = 320
-maximum_width = 460
-dismiss_on_selection = true
-principal_item = "brightness"
-
-[[bar.element]]
-kind = "item"
-item = "brightness"
-minimum_width = 180
-preferred_width = 320
-maximum_width = 460
+file = "sets/power-profile.toml"
 
 [[permission]]
 capability = "command.run.v1"

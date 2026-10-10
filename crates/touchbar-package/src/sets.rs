@@ -156,16 +156,23 @@ pub fn resolve_set_catalog(
                 preferred_width: panel.preferred_width,
                 maximum_width: panel.maximum_width,
                 dismiss_on_selection: panel.dismiss_on_selection,
-                principal_item: Some(document.id.clone()),
-                elements: items
-                    .into_iter()
-                    .map(|item| PresentationBarElement::Item {
-                        item,
-                        minimum_width: panel.minimum_width,
-                        preferred_width: panel.preferred_width,
-                        maximum_width: panel.maximum_width,
-                    })
-                    .collect(),
+                principal_item: panel
+                    .principal_item
+                    .clone()
+                    .or_else(|| Some(document.id.clone())),
+                elements: if !panel.elements.is_empty() {
+                    panel.elements.clone()
+                } else {
+                    items
+                        .into_iter()
+                        .map(|item| PresentationBarElement::Item {
+                            item,
+                            minimum_width: panel.minimum_width,
+                            preferred_width: panel.preferred_width,
+                            maximum_width: panel.maximum_width,
+                        })
+                        .collect()
+                },
             });
         }
         catalog.documents.insert(document.id.clone(), document);

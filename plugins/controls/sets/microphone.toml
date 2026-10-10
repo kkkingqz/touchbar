@@ -1,0 +1,32 @@
+version = 1
+id = "microphone"
+label = "Microphone"
+logic_config = "microphone"
+
+[layout]
+kind = "button"
+widget_id = 300
+label = "Toggle microphone"
+enabled_from = "available"
+selected_from = "microphone_muted"
+on_pressed = "microphone"
+on_activate = "microphone"
+padding = 8
+
+[[layout.children]]
+kind = "row"
+spacing = 4
+padding = 3
+
+[[layout.children.children]]
+kind = "icon"
+symbol_from = "microphone_icon"
+width = 28
+label = "Microphone"
+
+[[layout.children.children]]
+kind = "text"
+font_size = 11
+minimum = 28
+width = 80
+text_from = "microphone_text"

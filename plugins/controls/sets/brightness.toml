@@ -1,0 +1,99 @@
+version = 1
+id = "brightness"
+label = "Brightness"
+logic_config = "brightness"
+expanded_panel = "brightness-controls"
+press_and_hold_panel = "brightness-controls"
+
+[layout]
+kind = "responsive"
+widget_id = 210
+
+[[layout.variants]]
+representation = "minimal"
+minimum_width = 0
+
+[layout.variants.layout]
+kind = "button"
+widget_id = 200
+label = "Expand LIGHT"
+hold_ms = 420
+enabled_from = "available"
+padding = 8
+on_pressed = "brightness"
+on_activate = "brightness"
+on_long_pressed = "brightness"
+
+[[layout.variants.layout.children]]
+kind = "row"
+spacing = 3
+padding = 2
+
+[[layout.variants.layout.children.children]]
+kind = "icon"
+symbol = "chevron.right"
+label = "LIGHT"
+width = 24
+
+[[layout.variants.layout.children.children]]
+kind = "text"
+font_size = 11
+minimum = 36
+width = 80
+maximum = 160
+grow = 1
+text_from = "brightness_label"
+
+[[layout.variants]]
+representation = "full"
+minimum_width = 200
+
+[layout.variants.layout]
+kind = "row"
+spacing = 5
+padding = 4
+
+[[layout.variants.layout.children]]
+kind = "icon"
+symbol = "chevron.right"
+label = "LIGHT"
+width = 30
+
+[[layout.variants.layout.children]]
+kind = "slider"
+widget_id = 201
+label = "BRIGHTNESS"
+value_from = "brightness"
+enabled_from = "available"
+minimum = 60
+width = 120
+maximum = 800
+grow = 1
+on_pressed = "brightness-level"
+on_value_changed = "brightness-level"
+on_activate = "brightness-level"
+on_released = "brightness-level"
+on_cancelled = "brightness-level"
+
+[[layout.variants.layout.children]]
+kind = "text"
+font_size = 11
+minimum = 34
+width = 48
+maximum = 1000
+text_from = "brightness_text"
+
+[[panels]]
+id = "brightness-controls"
+minimum_width = 240
+preferred_width = 320
+maximum_width = 460
+dismiss_on_selection = true
+principal_item = "brightness"
+
+[[panels.element]]
+kind = "item"
+item = "brightness"
+minimum_width = 180
+preferred_width = 320
+maximum_width = 460

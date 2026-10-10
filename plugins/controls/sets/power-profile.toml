@@ -1,0 +1,16 @@
+version = 1
+id = "power-profile"
+label = "Power Profile"
+logic_config = "power-profile"
+
+[layout]
+kind = "button"
+widget_id = 500
+label = "Cycle power profile"
+text_from = "power_text"
+font_size = 10
+color = "on-accent"
+background = "accent"
+enabled_from = "available"
+on_pressed = "power-profile"
+on_activate = "power-profile"

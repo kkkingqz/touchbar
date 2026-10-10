@@ -204,11 +204,11 @@ flatpak-spawn --host /usr/bin/bash -c \
 
 **Interfaces:** Controls logic использует EngineApi.audio/display/power из task 2, сохраняет latest-value очередь и per-instance requests/resources. Описания panel layout живут в файле соответствующего основного набора; логика возвращает presentation commands и state patches.
 
-- [ ] Написать `drag_keeps_latest_value`, `cancel_does_not_commit_value`, `slider_release_preserves_activation`, `revocation_during_drag_blocks_write`, `hidden_controls_stop_watchers`, `brightness_device_is_bounded`, `early_events_are_instance_local`. Assert существующие command IDs, timeout/retry bounds и 32 early-events budget; pending volume у A не меняет B.
-- [ ] Выполнить controls/SDK tests и replay до миграции; новые layout bindings должны падать.
-- [ ] Перенести UI/panels в файлы; обработчики очередей остаются в логике, общие request/parse adapters — в SDK. Сохранить текущие tap/hold/anchored panel/dismissal политики и стабильные IDs. Не заменить root-owned executable проверку небезопасным fallback.
-- [ ] Build/check/replay controls; presentation acceptance и тест без grants проходят с предсказуемой недоступностью кнопок.
-- [ ] Коммит: `refactor: move controls layouts to declarative sets`.
+- [x] Написать `drag_keeps_latest_value`, `cancel_does_not_commit_value`, `slider_release_preserves_activation`, `revocation_during_drag_blocks_write`, `hidden_controls_stop_watchers`, `brightness_device_is_bounded`, `early_events_are_instance_local`. Assert существующие command IDs, timeout/retry bounds и 32 early-events budget; pending volume у A не меняет B.
+- [x] Выполнить controls/SDK tests и replay до миграции; новые layout bindings должны падать.
+- [x] Перенести UI/panels в файлы; обработчики очередей остаются в логике, общие request/parse adapters — в SDK. Сохранить текущие tap/hold/anchored panel/dismissal политики и стабильные IDs. Не заменить root-owned executable проверку небезопасным fallback.
+- [x] Build/check/replay controls; presentation acceptance и тест без grants проходят с предсказуемой недоступностью кнопок.
+- [x] Коммит: `refactor: move controls layouts to declarative sets`.
 
 ### Task 10: Media — динамические данные и seek
 

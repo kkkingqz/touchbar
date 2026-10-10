@@ -57,6 +57,9 @@ pub struct Selection {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PanelDefinition {
+    #[serde(default, rename = "element")]
+    pub elements: Vec<crate::PresentationBarElement>,
+    pub principal_item: Option<String>,
     pub id: String,
     pub layout: Option<LayoutNode>,
     #[serde(default)]
@@ -274,6 +277,13 @@ impl SetDocument {
             {
                 bail!("panel {} widths are out of order or bounds", panel.id);
             }
+            if !panel.items.is_empty() && !panel.elements.is_empty() {
+                bail!("panel items and elements are mutually exclusive");
+            }
+            if let Some(item) = &panel.principal_item {
+                validate_name(item)?;
+            }
+            validate_panel_elements(&panel.elements, 1, &mut budget.nodes)?;
             if panel.items.len() > 64 {
                 bail!("panel {} has too many item refs", panel.id);
             }
@@ -655,6 +665,93 @@ fn validate_node_bindings(
             bail!("repeat key does not match list {source} key");
         }
         validate_node_bindings(template, description, Some(fields))?;
+    }
+    Ok(())
+}
+
+fn validate_panel_elements(
+    elements: &[crate::PresentationBarElement],
+    depth: usize,
+    count: &mut usize,
+) -> Result<()> {
+    use crate::PresentationBarElement as E;
+    if depth > MAX_TREE_DEPTH {
+        bail!("panel composition too deep");
+    }
+    *count += elements.len();
+    if *count > MAX_NODES {
+        bail!("panel composition too large");
+    }
+    for element in elements {
+        match element {
+            E::Item {
+                item,
+                minimum_width,
+                preferred_width,
+                maximum_width,
+            } => validate_panel_item(item, *minimum_width, *preferred_width, *maximum_width)?,
+            E::FixedSpace { width } if *width > 8192 => bail!("panel space too large"),
+            E::FlexibleSpace { minimum, weight } if *minimum > 8192 || *weight == 0 => {
+                bail!("invalid panel space")
+            }
+            E::Group {
+                id,
+                spacing,
+                elements,
+                ..
+            } => {
+                validate_name(id)?;
+                if *spacing > 8192 {
+                    bail!("panel spacing too large");
+                }
+                validate_panel_group(elements, depth + 1, count)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+fn validate_panel_group(
+    elements: &[crate::PresentationGroupElement],
+    depth: usize,
+    count: &mut usize,
+) -> Result<()> {
+    use crate::PresentationGroupElement as E;
+    if depth > MAX_TREE_DEPTH {
+        bail!("panel composition too deep");
+    }
+    *count += elements.len();
+    if *count > MAX_NODES {
+        bail!("panel composition too large");
+    }
+    for element in elements {
+        match element {
+            E::Item {
+                item,
+                minimum_width,
+                preferred_width,
+                maximum_width,
+            } => validate_panel_item(item, *minimum_width, *preferred_width, *maximum_width)?,
+            E::Group {
+                id,
+                spacing,
+                elements,
+                ..
+            } => {
+                validate_name(id)?;
+                if *spacing > 8192 {
+                    bail!("panel spacing too large");
+                }
+                validate_panel_group(elements, depth + 1, count)?;
+            }
+        }
+    }
+    Ok(())
+}
+fn validate_panel_item(item: &str, min: u32, preferred: u32, max: u32) -> Result<()> {
+    validate_name(item)?;
+    if min > preferred || preferred > max || preferred == 0 || max > 8192 {
+        bail!("invalid panel item widths");
     }
     Ok(())
 }

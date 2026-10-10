@@ -42,6 +42,11 @@ env TOUCHBAR_HOME="$store_dir" \
     "$project_dir/target/release/touchbarctl" plugin enable \
     github:cameroncooper/touchbar-controls >/dev/null
 
+# This fixture exercises interactive presentations. Grant the exact package
+# command scope in this temporary store; denial is covered by set replay.
+env TOUCHBAR_HOME="$store_dir" "$project_dir/target/release/touchbarctl" plugin permission \
+    github:cameroncooper/touchbar-controls command.run.v1 allow --persistent >/dev/null
+
 env XDG_RUNTIME_DIR="$runtime_dir" TOUCHBAR_HOME="$store_dir" \
     "$project_dir/target/release/touchbar-sessiond" \
     --socket "$socket_name" --demo-tap \

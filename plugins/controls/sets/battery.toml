@@ -1,0 +1,42 @@
+version = 1
+id = "battery"
+label = "Battery"
+logic_config = "battery"
+
+[layout]
+kind = "responsive"
+
+[[layout.variants]]
+representation = "minimal"
+minimum_width = 0
+
+[layout.variants.layout]
+kind = "text"
+font_size = 11
+text = "82%"
+
+[[layout.variants]]
+representation = "full"
+minimum_width = 100
+
+[layout.variants.layout]
+kind = "row"
+spacing = 5
+padding = 5
+
+[[layout.variants.layout.children]]
+kind = "text"
+font_size = 11
+minimum = 32
+width = 42
+text = "82%"
+
+[[layout.variants.layout.children]]
+kind = "progress"
+label = "Battery"
+value = 0.82
+color = "accent"
+minimum = 40
+width = 100
+maximum = 800
+grow = 1

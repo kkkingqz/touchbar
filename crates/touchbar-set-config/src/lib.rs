@@ -7,3 +7,6 @@ pub use bundle::{MAX_SET_BUNDLE_BYTES, SetBundle};
 
 pub use schema::*;
 pub use state::*;
+
+mod panels;
+pub use panels::*;

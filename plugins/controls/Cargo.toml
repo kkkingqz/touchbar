@@ -9,3 +9,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 touchbar-component-sdk = { path = "../../crates/touchbar-component-sdk" }
+touchbar-logic-sdk = { path = "../../crates/touchbar-logic-sdk" }
+touchbar-set-config = { path = "../../crates/touchbar-set-config" }
